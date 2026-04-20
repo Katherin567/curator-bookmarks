@@ -1,6 +1,6 @@
-# obsidian-bookmark
+# curator-bookmarks
 
-黑曜书签 — Chrome 本地书签管理扩展
+Curator — Chrome 本地书签管理扩展
 
 ## 功能简介
 
@@ -31,7 +31,7 @@ npm -v
 ### 3. 进入项目目录
 
 ```bash
-cd obsidian-bookmark
+cd curator-bookmarks
 ```
 
 ### 4. 安装依赖

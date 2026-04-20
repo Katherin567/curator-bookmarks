@@ -308,7 +308,7 @@ function syncPageSection() {
     panel.hidden = panel.getAttribute('data-section-panel') !== key
   })
 
-  document.title = `${section.title} · 黑曜书签`
+  document.title = `${section.title} · Curator`
 }
 
 
