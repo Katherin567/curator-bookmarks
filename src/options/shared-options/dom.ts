@@ -1,5 +1,4 @@
-// @ts-nocheck
-export const dom = {}
+export const dom: Record<string, any> = {}
 
 export function cacheDom() {
   dom.availabilityTotalLabel = document.getElementById('availability-total-label')
@@ -34,6 +33,7 @@ export function cacheDom() {
   dom.aiSaveSettings = document.getElementById('ai-save-settings')
   dom.aiTestConnection = document.getElementById('ai-test-connection')
   dom.aiAction = document.getElementById('ai-action')
+  dom.aiPauseAction = document.getElementById('ai-pause-action')
   dom.aiStopAction = document.getElementById('ai-stop-action')
   dom.aiProgressText = document.getElementById('ai-progress-text')
   dom.aiProgressBar = document.getElementById('ai-progress-bar')
@@ -54,6 +54,10 @@ export function cacheDom() {
   dom.aiApplySelection = document.getElementById('ai-apply-selection')
   dom.aiResultsSubtitle = document.getElementById('ai-results-subtitle')
   dom.aiResultCount = document.getElementById('ai-result-count')
+  dom.aiFilterStatus = document.getElementById('ai-filter-status')
+  dom.aiFilterConfidence = document.getElementById('ai-filter-confidence')
+  dom.aiFilterQuery = document.getElementById('ai-filter-query')
+  dom.aiClearFilters = document.getElementById('ai-clear-filters')
   dom.aiResults = document.getElementById('ai-results')
   dom.availabilityAction = document.getElementById('availability-action')
   dom.availabilityPauseAction = document.getElementById('availability-pause-action')

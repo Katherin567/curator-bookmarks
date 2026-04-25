@@ -1,4 +1,3 @@
-// @ts-nocheck
 import {
   AI_NAMING_DEFAULT_BASE_URL,
   AI_NAMING_DEFAULT_MODEL,
@@ -40,7 +39,7 @@ export function createDefaultAiNamingSettings() {
   }
 }
 
-export function normalizeHistoryRunScope(scope) {
+export function normalizeHistoryRunScope(scope = null) {
   if (!scope || typeof scope !== 'object') {
     return {
       key: 'all',
@@ -138,6 +137,16 @@ export const aiNamingState = {
   scopeFolderId: '',
   bookmarks: [],
   requestOrigins: [],
+  metadataCache: {},
+  resultCache: {},
+  cacheDirty: false,
+  metadataCacheHits: 0,
+  resultCacheHits: 0,
+  paused: false,
+  pauseResolvers: [],
+  filterStatus: 'all',
+  filterConfidence: 'all',
+  filterQuery: '',
   settingsDirty: false,
   testingConnection: false,
   fetchingModels: false,

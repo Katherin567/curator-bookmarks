@@ -1,6 +1,9 @@
 node_modules/
 dist/
+.tmp-test/
+release/
 *.log
 .DS_Store
 .env
 .env.local
+.codex

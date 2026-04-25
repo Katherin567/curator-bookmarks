@@ -27,12 +27,19 @@ import {
   extractDomain,
   buildDuplicateKey
 } from '../shared/text.js'
-import { requestNavigationCheck } from '../shared/messages.js'
+import { cancelNavigationCheck, requestNavigationCheck } from '../shared/messages.js'
+import {
+  normalizeAiNamingSettings,
+  normalizeAiNamingCustomModels,
+  normalizeAiNamingFetchedModels,
+  serializeAiNamingSettings
+} from './sections/ai-settings.js'
 import {
   FETCH_TIMEOUT_MS,
   buildNavigationSuccess,
   buildFailureClassification,
   shouldRetryNavigation,
+  shouldAcceptNavigationSuccess,
   summarizeNavigationEvidence,
   shouldClassifyAsHighConfidence,
   shouldFallbackToGet,
@@ -50,10 +57,8 @@ import {
   AI_NAMING_DEFAULT_MODEL,
   AI_NAMING_DEFAULT_TIMEOUT_MS,
   AI_NAMING_DEFAULT_BATCH_SIZE,
-  AI_NAMING_MAX_BATCH_SIZE,
   AI_NAMING_MAX_TEXT_LENGTH,
   AI_NAMING_MODELS_ENDPOINT_SUFFIX,
-  AI_NAMING_FETCHED_MODELS_LIMIT,
   AI_NAMING_PRESET_MODELS,
   AI_NAMING_RESPONSE_SCHEMA
 } from './shared-options/constants.js'
@@ -63,8 +68,7 @@ import {
   aiNamingState,
   aiNamingManagerState,
   createEmptyIgnoreRules,
-  createEmptyRedirectCache,
-  createDefaultAiNamingSettings
+  createEmptyRedirectCache
 } from './shared-options/state.js'
 import { dom, cacheDom } from './shared-options/dom.js'
 import { escapeHtml, escapeAttr } from './shared-options/html.js'
@@ -75,6 +79,14 @@ import {
   formatDateTime,
   setModalHidden
 } from './shared-options/utils.js'
+import {
+  collectRequestOrigins,
+  containsPermissions,
+  getOriginPermissionPattern,
+  isCheckableUrl,
+  requestPermissions
+} from './shared-options/permissions.js'
+import { truncateText } from './shared-options/text.js'
 import {
   normalizeIgnoreRules,
   serializeIgnoreRules,
@@ -133,6 +145,10 @@ import {
 let availabilityRenderFrame = 0
 let availabilityPauseResolvers = []
 
+const AI_METADATA_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000
+const AI_RESULT_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000
+const AI_CACHE_LIMIT = 2500
+
 const recycleCallbacks = {
   renderAvailabilitySection,
   hydrateAvailabilityCatalog,
@@ -186,7 +202,9 @@ async function hydratePersistentState() {
       STORAGE_KEYS.detectionHistory,
       STORAGE_KEYS.redirectCache,
       STORAGE_KEYS.recycleBin,
-      STORAGE_KEYS.aiNamingSettings
+      STORAGE_KEYS.aiNamingSettings,
+      STORAGE_KEYS.aiMetadataCache,
+      STORAGE_KEYS.aiResultCache
     ])
 
     managerState.ignoreRules = normalizeIgnoreRules(stored[STORAGE_KEYS.ignoreRules])
@@ -194,6 +212,8 @@ async function hydratePersistentState() {
     managerState.redirectCache = normalizeRedirectCache(stored[STORAGE_KEYS.redirectCache])
     managerState.recycleBin = normalizeRecycleBin(stored[STORAGE_KEYS.recycleBin])
     aiNamingManagerState.settings = normalizeAiNamingSettings(stored[STORAGE_KEYS.aiNamingSettings])
+    aiNamingState.metadataCache = normalizeAiMetadataCache(stored[STORAGE_KEYS.aiMetadataCache])
+    aiNamingState.resultCache = normalizeAiResultCache(stored[STORAGE_KEYS.aiResultCache])
   } catch (error) {
     availabilityState.lastError =
       error instanceof Error ? error.message : '本地规则读取失败，请刷新页面后重试。'
@@ -203,84 +223,115 @@ async function hydratePersistentState() {
   }
 }
 
-function normalizeAiNamingSettings(rawSettings) {
-  const defaults = createDefaultAiNamingSettings()
-  const source = rawSettings && typeof rawSettings === 'object' ? rawSettings : {}
-  const apiStyle = String(source.apiStyle || defaults.apiStyle).trim()
-  const timeoutMs = Number(source.timeoutMs)
-  const batchSize = Number(source.batchSize)
-
-  return {
-    baseUrl: String(source.baseUrl || defaults.baseUrl).trim() || defaults.baseUrl,
-    apiKey: String(source.apiKey || defaults.apiKey).trim(),
-    model: String(source.model || defaults.model).trim() || defaults.model,
-    customModels: normalizeAiNamingCustomModels(source.customModels),
-    fetchedModels: normalizeAiNamingFetchedModels(source.fetchedModels),
-    apiStyle: apiStyle === 'chat_completions' ? 'chat_completions' : 'responses',
-    timeoutMs: Number.isFinite(timeoutMs) ? Math.max(5000, Math.min(timeoutMs, 120000)) : defaults.timeoutMs,
-    batchSize: Number.isFinite(batchSize)
-      ? Math.max(1, Math.min(Math.round(batchSize), AI_NAMING_MAX_BATCH_SIZE))
-      : defaults.batchSize,
-    autoSelectHighConfidence:
-      typeof source.autoSelectHighConfidence === 'boolean'
-        ? source.autoSelectHighConfidence
-        : defaults.autoSelectHighConfidence,
-    systemPrompt: String(source.systemPrompt || defaults.systemPrompt).trim()
-  }
-}
-
-function normalizeAiNamingCustomModels(rawModels) {
-  return normalizeModelIdList(rawModels, 40)
-}
-
-function normalizeAiNamingFetchedModels(rawModels) {
-  return normalizeModelIdList(rawModels, AI_NAMING_FETCHED_MODELS_LIMIT)
-}
-
-function normalizeModelIdList(rawModels, limit = 40) {
-  const values = Array.isArray(rawModels)
-    ? rawModels
-    : typeof rawModels === 'string'
-      ? rawModels.split(/[\n,;]+/g)
-      : []
-  const seen = new Set()
-
-  return values
-    .map((value) => String(value || '').trim())
-    .filter(Boolean)
-    .filter((value) => {
-      const normalized = normalizeText(value)
-      if (!normalized || seen.has(normalized)) {
-        return false
-      }
-
-      seen.add(normalized)
-      return true
-    })
-    .slice(0, Math.max(1, limit))
-}
-
-function serializeAiNamingSettings(settings = aiNamingManagerState.settings) {
-  const normalized = normalizeAiNamingSettings(settings)
-  return {
-    baseUrl: normalized.baseUrl,
-    apiKey: normalized.apiKey,
-    model: normalized.model,
-    customModels: normalized.customModels.slice(),
-    fetchedModels: normalized.fetchedModels.slice(),
-    apiStyle: normalized.apiStyle,
-    timeoutMs: normalized.timeoutMs,
-    batchSize: normalized.batchSize,
-    autoSelectHighConfidence: normalized.autoSelectHighConfidence,
-    systemPrompt: normalized.systemPrompt
-  }
-}
-
 async function saveAiNamingSettings(settings = aiNamingManagerState.settings) {
   aiNamingManagerState.settings = normalizeAiNamingSettings(settings)
   await setLocalStorage({
     [STORAGE_KEYS.aiNamingSettings]: serializeAiNamingSettings(aiNamingManagerState.settings)
   })
+}
+
+function normalizeAiMetadataCache(rawCache) {
+  return normalizeAiCacheRecord(rawCache, AI_METADATA_CACHE_TTL_MS, (entry) => {
+    const metadata = entry?.metadata
+    if (!metadata || typeof metadata !== 'object') {
+      return null
+    }
+
+    return {
+      bookmarkId: String(entry.bookmarkId || '').trim(),
+      url: String(entry.url || '').trim(),
+      fetchedAt: Number(entry.fetchedAt) || 0,
+      metadata: normalizeAiMetadata(metadata)
+    }
+  })
+}
+
+function normalizeAiResultCache(rawCache) {
+  return normalizeAiCacheRecord(rawCache, AI_RESULT_CACHE_TTL_MS, (entry) => {
+    const item = entry?.item
+    if (!item || typeof item !== 'object') {
+      return null
+    }
+
+    return {
+      createdAt: Number(entry.createdAt) || 0,
+      item: {
+        bookmarkId: String(item.bookmarkId || '').trim(),
+        action: ['rename', 'keep', 'manual_review'].includes(String(item.action || ''))
+          ? String(item.action)
+          : 'manual_review',
+        suggestedTitle: cleanAiSuggestedTitle(item.suggestedTitle),
+        confidence: normalizeAiConfidence(item.confidence),
+        reason: String(item.reason || '').replace(/\s+/g, ' ').trim()
+      }
+    }
+  })
+}
+
+function normalizeAiCacheRecord(rawCache, ttlMs, normalizeEntry) {
+  const source = rawCache && typeof rawCache === 'object' ? rawCache : {}
+  const now = Date.now()
+  const entries = Object.entries(source)
+    .map(([key, value]) => {
+      const normalized = normalizeEntry(value)
+      if (!normalized) {
+        return null
+      }
+
+      const timestamp = Number(normalized.fetchedAt || normalized.createdAt) || 0
+      if (!timestamp || now - timestamp > ttlMs) {
+        return null
+      }
+
+      return [String(key), normalized]
+    })
+    .filter(Boolean)
+    .sort((left, right) => {
+      const leftTime = Number(left[1].fetchedAt || left[1].createdAt) || 0
+      const rightTime = Number(right[1].fetchedAt || right[1].createdAt) || 0
+      return rightTime - leftTime
+    })
+    .slice(0, AI_CACHE_LIMIT)
+
+  return Object.fromEntries(entries)
+}
+
+function normalizeAiMetadata(metadata) {
+  return {
+    finalUrl: String(metadata.finalUrl || ''),
+    title: normalizeAiMetadataText(metadata.title || ''),
+    ogTitle: normalizeAiMetadataText(metadata.ogTitle || ''),
+    twitterTitle: normalizeAiMetadataText(metadata.twitterTitle || ''),
+    h1: normalizeAiMetadataText(metadata.h1 || ''),
+    siteName: normalizeAiMetadataText(metadata.siteName || ''),
+    description: normalizeAiMetadataText(metadata.description || ''),
+    contentType: String(metadata.contentType || '').slice(0, 120),
+    source: String(metadata.source || '').slice(0, 80)
+  }
+}
+
+async function saveAiNamingCaches({ force = false } = {}) {
+  if (!force && !aiNamingState.cacheDirty) {
+    return
+  }
+
+  aiNamingState.metadataCache = pruneAiCache(aiNamingState.metadataCache, AI_CACHE_LIMIT, 'fetchedAt')
+  aiNamingState.resultCache = pruneAiCache(aiNamingState.resultCache, AI_CACHE_LIMIT, 'createdAt')
+  await setLocalStorage({
+    [STORAGE_KEYS.aiMetadataCache]: aiNamingState.metadataCache,
+    [STORAGE_KEYS.aiResultCache]: aiNamingState.resultCache
+  })
+  aiNamingState.cacheDirty = false
+}
+
+function pruneAiCache(cache, limit, timestampKey) {
+  return Object.fromEntries(
+    Object.entries(cache || {})
+      .sort((left, right) => {
+        return (Number(right[1]?.[timestampKey]) || 0) - (Number(left[1]?.[timestampKey]) || 0)
+      })
+      .slice(0, limit)
+  )
 }
 
 function syncPageSection() {
@@ -308,7 +359,11 @@ function syncPageSection() {
     panel.hidden = panel.getAttribute('data-section-panel') !== key
   })
 
-  document.title = `${section.title} · Curator`
+  document.title = `${section.title} · Curator Bookmark`
+
+  if (dom.availabilityAction) {
+    renderAvailabilitySection()
+  }
 }
 
 
@@ -327,6 +382,7 @@ function bindEvents() {
   dom.aiSaveSettings?.addEventListener('click', saveAiNamingSettingsFromDom)
   dom.aiTestConnection?.addEventListener('click', handleAiConnectivityTest)
   dom.aiAction?.addEventListener('click', handleAiNamingAction)
+  dom.aiPauseAction?.addEventListener('click', toggleAiNamingPause)
   dom.aiStopAction?.addEventListener('click', requestAiNamingStop)
   dom.aiSelectAll?.addEventListener('click', selectAllAiNamingResults)
   dom.aiSelectHighConfidence?.addEventListener('click', selectHighConfidenceAiResults)
@@ -334,6 +390,10 @@ function bindEvents() {
   dom.aiApplySelection?.addEventListener('click', applySelectedAiNamingResults)
   dom.aiResults?.addEventListener('click', handleAiResultsClick)
   dom.aiResults?.addEventListener('change', handleAiResultsChange)
+  dom.aiFilterStatus?.addEventListener('change', handleAiResultsFilterChange)
+  dom.aiFilterConfidence?.addEventListener('change', handleAiResultsFilterChange)
+  dom.aiFilterQuery?.addEventListener('input', handleAiResultsFilterChange)
+  dom.aiClearFilters?.addEventListener('click', clearAiResultsFilters)
   dom.aiBaseUrl?.addEventListener('input', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
   dom.aiApiKey?.addEventListener('input', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
   dom.aiRevealApiKey?.addEventListener('change', handleAiRevealApiKeyChange)
@@ -699,6 +759,10 @@ function getCurrentAiNamingScopeMeta() {
 
 function resetAiNamingRunState() {
   aiNamingState.checkedBookmarks = 0
+  aiNamingState.metadataCacheHits = 0
+  aiNamingState.resultCacheHits = 0
+  aiNamingState.paused = false
+  aiNamingState.pauseResolvers = []
   aiNamingState.suggestedCount = 0
   aiNamingState.manualReviewCount = 0
   aiNamingState.unchangedCount = 0
@@ -892,6 +956,8 @@ function requestAvailabilityStop() {
 
   availabilityState.stopRequested = true
   availabilityState.paused = false
+  availabilityState.abortController?.abort()
+  cancelActiveNavigationChecks()
   releaseAvailabilityPauseResolvers()
   renderAvailabilitySection()
 }
@@ -906,6 +972,8 @@ async function runAvailabilityDetection({ probeEnabled }) {
   availabilityState.lastRunOutcome = ''
   availabilityState.runQueue = availabilityState.bookmarks.slice()
   availabilityState.deletedBookmarkIds = new Set()
+  availabilityState.abortController = new AbortController()
+  availabilityState.activeNavigationCheckIds = new Set()
   resetDetectionResults()
   clearAvailabilitySelection()
   clearRedirectSelection(redirectsCallbacks)
@@ -966,6 +1034,8 @@ async function runAvailabilityDetection({ probeEnabled }) {
     availabilityState.stopRequested = false
     availabilityState.runQueue = []
     availabilityState.deletedBookmarkIds = new Set()
+    availabilityState.abortController = null
+    availabilityState.activeNavigationCheckIds = new Set()
     releaseAvailabilityPauseResolvers()
     try {
       await persistRedirectCacheSnapshot(redirectsCallbacks, {
@@ -990,7 +1060,7 @@ async function inspectBookmarkAvailability(bookmark, { probeEnabled }) {
   }
   attempts.push(firstNavigation)
 
-  if (firstNavigation.status === 'available') {
+  if (shouldAcceptNavigationSuccess(firstNavigation)) {
     return buildNavigationSuccess(bookmark, firstNavigation, '首轮后台导航成功')
   }
 
@@ -1005,7 +1075,7 @@ async function inspectBookmarkAvailability(bookmark, { probeEnabled }) {
     }
     attempts.push(secondNavigation)
 
-    if (secondNavigation.status === 'available') {
+    if (shouldAcceptNavigationSuccess(secondNavigation)) {
       return buildNavigationSuccess(bookmark, secondNavigation, '二次后台导航成功')
     }
   }
@@ -1049,14 +1119,18 @@ function isBookmarkRemovedDuringRun(bookmarkId) {
 }
 
 async function runNavigationAttempt(url, timeoutMs) {
+  const checkId = createNavigationCheckId()
+  availabilityState.activeNavigationCheckIds?.add(checkId)
+
   try {
-    const result = await requestNavigationCheck(url, timeoutMs)
+    const result = await requestNavigationCheck(url, timeoutMs, checkId)
 
     return {
       status: result?.status || 'failed',
       finalUrl: result?.finalUrl || url,
       detail: result?.detail || '后台导航失败。',
-      errorCode: result?.errorCode || ''
+      errorCode: result?.errorCode || '',
+      networkEvidence: result?.networkEvidence
     }
   } catch (error) {
     return {
@@ -1065,7 +1139,22 @@ async function runNavigationAttempt(url, timeoutMs) {
       detail: error instanceof Error ? error.message : '后台导航失败。',
       errorCode: 'runtime-message-failed'
     }
+  } finally {
+    availabilityState.activeNavigationCheckIds?.delete(checkId)
   }
+}
+
+function createNavigationCheckId() {
+  return `nav-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`
+}
+
+function cancelActiveNavigationChecks() {
+  const checkIds = [...(availabilityState.activeNavigationCheckIds || [])]
+  availabilityState.activeNavigationCheckIds = new Set()
+
+  checkIds.forEach((checkId) => {
+    cancelNavigationCheck(checkId).catch(() => {})
+  })
 }
 
 async function probeBookmarkUrl(url) {
@@ -1095,6 +1184,17 @@ async function probeBookmarkUrl(url) {
 
 async function fetchWithTimeout(url, method) {
   const controller = new AbortController()
+  const runSignal = availabilityState.abortController?.signal
+  const abortCurrentFetch = () => {
+    controller.abort()
+  }
+
+  if (runSignal?.aborted) {
+    controller.abort()
+  } else {
+    runSignal?.addEventListener('abort', abortCurrentFetch, { once: true })
+  }
+
   const timeoutId = window.setTimeout(() => {
     controller.abort()
   }, FETCH_TIMEOUT_MS)
@@ -1110,6 +1210,7 @@ async function fetchWithTimeout(url, method) {
     })
   } finally {
     clearTimeout(timeoutId)
+    runSignal?.removeEventListener('abort', abortCurrentFetch)
   }
 }
 
@@ -1279,19 +1380,51 @@ function renderAvailabilitySection() {
     availabilityState.failedResults.length === 0
   dom.deleteFailedBookmarks.textContent = availabilityState.deleting ? '正在删除…' : '批量删除'
 
-  renderAvailabilityHistory(historyCallbacks)
-  renderAiNamingSection()
-  renderAvailabilitySelectionGroup()
-  renderReviewResults()
-  renderFailedResults()
-  renderRedirectSection(redirectsCallbacks)
-  renderDuplicateSection()
-  renderIgnoreSection()
-  renderRecycleSection()
+  renderActiveOptionsSection()
   renderScopeModal()
   renderMoveModal()
   renderDeleteModal()
   renderAiModelModal()
+}
+
+function renderActiveOptionsSection() {
+  const activeSection = SECTION_META[getCurrentSectionKey()] ? getCurrentSectionKey() : 'availability'
+
+  if (activeSection === 'availability') {
+    renderAvailabilitySelectionGroup()
+    renderReviewResults()
+    renderFailedResults()
+    return
+  }
+
+  if (activeSection === 'history') {
+    renderAvailabilityHistory(historyCallbacks)
+    return
+  }
+
+  if (activeSection === 'ai') {
+    renderAiNamingSection()
+    return
+  }
+
+  if (activeSection === 'redirects') {
+    renderRedirectSection(redirectsCallbacks)
+    return
+  }
+
+  if (activeSection === 'duplicates') {
+    renderDuplicateSection()
+    return
+  }
+
+  if (activeSection === 'ignore') {
+    renderIgnoreSection()
+    return
+  }
+
+  if (activeSection === 'recycle') {
+    renderRecycleSection(recycleCallbacks)
+  }
 }
 
 function syncAiNamingSettingsDraftFromDom({ markDirty = false } = {}) {
@@ -1474,7 +1607,9 @@ function renderAiNamingSection() {
   dom.aiProgressText.textContent = aiNamingState.running
     ? aiNamingState.stopRequested
       ? `正在停止 ${progressLabel}`
-      : `生成中 ${progressLabel}`
+      : aiNamingState.paused
+        ? `已暂停 ${progressLabel}`
+        : `生成中 ${progressLabel}`
     : aiNamingState.lastCompletedAt
       ? `已完成 ${progressLabel}`
       : progressLabel
@@ -1488,6 +1623,11 @@ function renderAiNamingSection() {
     aiNamingState.applying ||
     aiNamingState.requestingPermission
   dom.aiAction.textContent = aiNamingState.lastCompletedAt ? '重新生成建议' : '开始生成建议'
+  if (dom.aiPauseAction) {
+    dom.aiPauseAction.classList.toggle('hidden', !aiNamingState.running)
+    dom.aiPauseAction.disabled = !aiNamingState.running || aiNamingState.stopRequested
+    dom.aiPauseAction.textContent = aiNamingState.paused ? '继续生成' : '暂停生成'
+  }
   dom.aiStopAction.classList.toggle('hidden', !aiNamingState.running)
   dom.aiStopAction.disabled = !aiNamingState.running || aiNamingState.stopRequested
   dom.aiStopAction.textContent = aiNamingState.stopRequested ? '停止中…' : '停止本次生成'
@@ -1528,10 +1668,15 @@ function renderAiNamingSection() {
   dom.aiClearSelection.disabled = selectedResults.length === 0
   dom.aiApplySelection.disabled = aiNamingState.running || aiNamingState.applying || selectedResults.length === 0
 
-  dom.aiResultCount.textContent = `${aiNamingState.results.length} 条结果`
+  const visibleAiResults = getVisibleAiNamingResults()
+  dom.aiResultCount.textContent = visibleAiResults.length === aiNamingState.results.length
+    ? `${aiNamingState.results.length} 条结果`
+    : `${visibleAiResults.length} / ${aiNamingState.results.length} 条结果`
   dom.aiResultsSubtitle.textContent = aiNamingState.lastCompletedAt
-    ? `最近一次完成于 ${formatDateTime(aiNamingState.lastCompletedAt)}。建议改名 ${aiNamingState.suggestedCount} 条，待确认 ${aiNamingState.manualReviewCount} 条，失败 ${aiNamingState.failedCount} 条。`
+    ? `最近一次完成于 ${formatDateTime(aiNamingState.lastCompletedAt)}。建议改名 ${aiNamingState.suggestedCount} 条，待确认 ${aiNamingState.manualReviewCount} 条，失败 ${aiNamingState.failedCount} 条。缓存命中：网页 ${aiNamingState.metadataCacheHits} 条，AI ${aiNamingState.resultCacheHits} 条。`
     : '配置 AI 提供方后，开始生成建议，这里会展示当前标题、建议标题、置信度与原因。'
+
+  renderAiResultsFilterControls()
 
   renderAiNamingResults()
 }
@@ -1934,10 +2079,49 @@ async function saveAiModelModalSettings() {
   renderAvailabilitySection()
 }
 
+function renderAiResultsFilterControls() {
+  if (dom.aiFilterStatus && dom.aiFilterStatus !== document.activeElement) {
+    dom.aiFilterStatus.value = aiNamingState.filterStatus
+  }
+  if (dom.aiFilterConfidence && dom.aiFilterConfidence !== document.activeElement) {
+    dom.aiFilterConfidence.value = aiNamingState.filterConfidence
+  }
+  if (dom.aiFilterQuery && dom.aiFilterQuery !== document.activeElement) {
+    dom.aiFilterQuery.value = aiNamingState.filterQuery
+  }
+  if (dom.aiClearFilters) {
+    dom.aiClearFilters.disabled = !hasActiveAiResultsFilter()
+  }
+}
+
+function handleAiResultsFilterChange() {
+  aiNamingState.filterStatus = String(dom.aiFilterStatus?.value || 'all')
+  aiNamingState.filterConfidence = String(dom.aiFilterConfidence?.value || 'all')
+  aiNamingState.filterQuery = String(dom.aiFilterQuery?.value || '').trim()
+  renderAvailabilitySection()
+}
+
+function clearAiResultsFilters() {
+  aiNamingState.filterStatus = 'all'
+  aiNamingState.filterConfidence = 'all'
+  aiNamingState.filterQuery = ''
+  renderAvailabilitySection()
+}
+
+function hasActiveAiResultsFilter() {
+  return (
+    aiNamingState.filterStatus !== 'all' ||
+    aiNamingState.filterConfidence !== 'all' ||
+    Boolean(aiNamingState.filterQuery)
+  )
+}
+
 function renderAiNamingResults() {
   if (!dom.aiResults) {
     return
   }
+
+  const visibleResults = getVisibleAiNamingResults()
 
   if (aiNamingState.running && !aiNamingState.results.length) {
     dom.aiResults.innerHTML = '<div class="detect-empty">正在抓取网页元信息并生成命名建议，请稍候。</div>'
@@ -1953,9 +2137,93 @@ function renderAiNamingResults() {
     return
   }
 
-  dom.aiResults.innerHTML = aiNamingState.results
+  if (!visibleResults.length) {
+    dom.aiResults.innerHTML = '<div class="detect-empty">当前筛选条件下没有匹配的 AI 命名结果。</div>'
+    return
+  }
+
+  dom.aiResults.innerHTML = visibleResults
     .map((result) => buildAiNamingResultCard(result))
     .join('')
+}
+
+function getVisibleAiNamingResults() {
+  const normalizedQuery = normalizeText(aiNamingState.filterQuery)
+  return aiNamingState.results.filter((result) => {
+    if (aiNamingState.filterStatus === 'changed' && !isLargeAiTitleChange(result)) {
+      return false
+    }
+
+    if (
+      aiNamingState.filterStatus !== 'all' &&
+      aiNamingState.filterStatus !== 'changed' &&
+      result.status !== aiNamingState.filterStatus
+    ) {
+      return false
+    }
+
+    if (
+      aiNamingState.filterConfidence !== 'all' &&
+      result.confidence !== aiNamingState.filterConfidence
+    ) {
+      return false
+    }
+
+    if (normalizedQuery) {
+      const haystack = normalizeText([
+        result.path,
+        result.domain,
+        result.url,
+        result.currentTitle,
+        result.suggestedTitle
+      ].join(' '))
+      if (!haystack.includes(normalizedQuery)) {
+        return false
+      }
+    }
+
+    return true
+  })
+}
+
+function isLargeAiTitleChange(result) {
+  if (result.status !== 'suggested') {
+    return false
+  }
+
+  const currentTitle = normalizeText(result.currentTitle)
+  const suggestedTitle = normalizeText(result.suggestedTitle)
+  if (!currentTitle || !suggestedTitle || currentTitle === suggestedTitle) {
+    return false
+  }
+
+  const maxLength = Math.max(currentTitle.length, suggestedTitle.length, 1)
+  const lengthDelta = Math.abs(currentTitle.length - suggestedTitle.length)
+  const distanceRatio = levenshteinDistance(currentTitle, suggestedTitle) / maxLength
+  return lengthDelta >= 16 || distanceRatio >= 0.55
+}
+
+function levenshteinDistance(left, right) {
+  const previous = Array.from({ length: right.length + 1 }, (_value, index) => index)
+  const current = Array.from({ length: right.length + 1 }, () => 0)
+
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    current[0] = leftIndex
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      const cost = left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1
+      current[rightIndex] = Math.min(
+        current[rightIndex - 1] + 1,
+        previous[rightIndex] + 1,
+        previous[rightIndex - 1] + cost
+      )
+    }
+
+    for (let index = 0; index < previous.length; index += 1) {
+      previous[index] = current[index]
+    }
+  }
+
+  return previous[right.length]
 }
 
 function buildAiNamingResultCard(result) {
@@ -2004,7 +2272,7 @@ function buildAiNamingResultCard(result) {
 }
 
 function getSelectableAiNamingResults() {
-  return aiNamingState.results.filter((result) => result.status === 'suggested')
+  return getVisibleAiNamingResults().filter((result) => result.status === 'suggested')
 }
 
 function getSelectedAiNamingResults() {
@@ -2110,7 +2378,41 @@ function requestAiNamingStop() {
   }
 
   aiNamingState.stopRequested = true
+  aiNamingState.paused = false
+  releaseAiNamingPauseResolvers()
   renderAvailabilitySection()
+}
+
+function toggleAiNamingPause() {
+  if (!aiNamingState.running || aiNamingState.stopRequested || aiNamingState.applying) {
+    return
+  }
+
+  aiNamingState.paused = !aiNamingState.paused
+  if (!aiNamingState.paused) {
+    releaseAiNamingPauseResolvers()
+  }
+
+  renderAvailabilitySection()
+}
+
+async function waitForAiNamingRun() {
+  while (aiNamingState.paused && !aiNamingState.stopRequested) {
+    await new Promise((resolve) => {
+      aiNamingState.pauseResolvers.push(resolve)
+    })
+  }
+
+  return !aiNamingState.stopRequested
+}
+
+function releaseAiNamingPauseResolvers() {
+  const resolvers = aiNamingState.pauseResolvers || []
+  aiNamingState.pauseResolvers = []
+
+  resolvers.forEach((resolve) => {
+    resolve()
+  })
 }
 
 async function ensureAiNamingPermissionsForRun({ interactive = true } = {}) {
@@ -2183,12 +2485,25 @@ async function ensureAiNamingProviderPermission({ interactive = true, baseUrl = 
 }
 
 function getAiNamingPermissionOrigins() {
-  const origins = new Set(aiNamingState.requestOrigins)
+  const origins = new Set(
+    aiNamingState.bookmarks
+      .filter((bookmark) => !hasFreshAiMetadataCache(bookmark))
+      .flatMap((bookmark) => {
+        const origin = getOriginPermissionPattern(bookmark.url)
+        return origin ? [origin] : []
+      })
+  )
   const providerOrigin = getOriginPermissionPattern(aiNamingManagerState.settings.baseUrl)
   if (providerOrigin) {
     origins.add(providerOrigin)
   }
   return [...origins]
+}
+
+function hasFreshAiMetadataCache(bookmark) {
+  const cacheKey = createAiMetadataCacheKey(bookmark)
+  const entry = aiNamingState.metadataCache?.[cacheKey]
+  return Boolean(entry && Date.now() - Number(entry.fetchedAt || 0) <= AI_METADATA_CACHE_TTL_MS)
 }
 
 function getAiNamingProviderPermissionOrigin(baseUrl = aiNamingManagerState.settings.baseUrl) {
@@ -2344,6 +2659,10 @@ function getAiNamingStatusCopy() {
   }
 
   if (aiNamingState.running) {
+    if (aiNamingState.paused) {
+      return 'AI 命名已暂停。继续后会保留当前结果并从下一条书签继续处理。'
+    }
+
     return '系统正在抓取网页元信息并调用 AI 生成命名建议。你可以随时停止当前批次。'
   }
 
@@ -2422,6 +2741,7 @@ function getAiNamingConfidenceLabel(confidence) {
 async function runAiNamingSuggestions() {
   aiNamingState.running = true
   aiNamingState.stopRequested = false
+  aiNamingState.paused = false
   resetAiNamingRunState()
   aiNamingState.eligibleBookmarks = aiNamingState.bookmarks.length
   renderAvailabilitySection()
@@ -2440,6 +2760,10 @@ async function runAiNamingSuggestions() {
       const retryCandidates = []
 
       for (const bookmark of chunk) {
+        if (!(await waitForAiNamingRun())) {
+          break
+        }
+
         if (aiNamingState.stopRequested) {
           break
         }
@@ -2458,6 +2782,10 @@ async function runAiNamingSuggestions() {
         }
       }
 
+      if (!(await waitForAiNamingRun())) {
+        break
+      }
+
       if (!preparedItems.length || aiNamingState.stopRequested) {
         if (retryCandidates.length && !aiNamingState.stopRequested) {
           await retryAiNamingBookmarks(retryCandidates, settings)
@@ -2465,9 +2793,27 @@ async function runAiNamingSuggestions() {
         continue
       }
 
+      const uncachedPreparedItems = []
+      for (const preparedItem of preparedItems) {
+        const cachedModelItem = getCachedAiNamingModelItem(preparedItem, settings)
+        if (cachedModelItem) {
+          commitAiNamingResult(preparedItem.bookmark, cachedModelItem, settings)
+          aiNamingState.resultCacheHits += 1
+        } else {
+          uncachedPreparedItems.push(preparedItem)
+        }
+      }
+
+      if (!uncachedPreparedItems.length) {
+        recalculateAiNamingSummary()
+        scheduleAvailabilityRender()
+        await saveAiNamingCaches()
+        continue
+      }
+
       try {
-        const aiResponseItems = await requestAiNamingBatch(preparedItems)
-        const failedPreparedItems = mergeAiNamingBatchResults(preparedItems, aiResponseItems)
+        const aiResponseItems = await requestAiNamingBatch(uncachedPreparedItems)
+        const failedPreparedItems = mergeAiNamingBatchResults(uncachedPreparedItems, aiResponseItems, settings)
         retryCandidates.push(...failedPreparedItems.map((preparedItem) => {
           return {
             bookmark: preparedItem.bookmark,
@@ -2475,7 +2821,7 @@ async function runAiNamingSuggestions() {
           }
         }))
       } catch (error) {
-        retryCandidates.push(...preparedItems.map((preparedItem) => {
+        retryCandidates.push(...uncachedPreparedItems.map((preparedItem) => {
           return {
             bookmark: preparedItem.bookmark,
             initialError: error
@@ -2488,6 +2834,7 @@ async function runAiNamingSuggestions() {
       }
 
       recalculateAiNamingSummary()
+      await saveAiNamingCaches()
       scheduleAvailabilityRender()
     }
 
@@ -2498,13 +2845,20 @@ async function runAiNamingSuggestions() {
   } finally {
     aiNamingState.running = false
     aiNamingState.stopRequested = false
+    aiNamingState.paused = false
+    releaseAiNamingPauseResolvers()
     recalculateAiNamingSummary()
+    await saveAiNamingCaches()
     renderAvailabilitySection()
   }
 }
 
 async function retryAiNamingBookmarks(retryCandidates, settings = aiNamingManagerState.settings) {
   for (const candidate of retryCandidates) {
+    if (!(await waitForAiNamingRun())) {
+      break
+    }
+
     if (aiNamingState.stopRequested) {
       break
     }
@@ -2534,6 +2888,7 @@ async function generateAiNamingResultForBookmark(bookmark, settings = aiNamingMa
     throw new Error('AI 返回中缺少该书签的命名结果。')
   }
 
+  cacheAiNamingModelItem(preparedItem, modelItem, settings)
   return modelItem
 }
 
@@ -2595,7 +2950,7 @@ function getAiNamingFailureMessage(error) {
 }
 
 async function buildAiNamingPreparedItem(bookmark, timeoutMs) {
-  const metadata = await fetchBookmarkMetadataForAi(bookmark.url, timeoutMs)
+  const metadata = await getAiMetadataForBookmark(bookmark, timeoutMs)
   return {
     bookmark,
     requestItem: {
@@ -2611,13 +2966,43 @@ async function buildAiNamingPreparedItem(bookmark, timeoutMs) {
         twitter_title: metadata.twitterTitle,
         h1: metadata.h1,
         site_name: metadata.siteName,
-        description: metadata.description
+        description: metadata.description,
+        content_type: metadata.contentType,
+        source: metadata.source
       }
     }
   }
 }
 
-async function fetchBookmarkMetadataForAi(url, timeoutMs) {
+async function getAiMetadataForBookmark(bookmark, timeoutMs) {
+  const cacheKey = createAiMetadataCacheKey(bookmark)
+  const cachedEntry = aiNamingState.metadataCache?.[cacheKey]
+  if (cachedEntry && Date.now() - Number(cachedEntry.fetchedAt || 0) <= AI_METADATA_CACHE_TTL_MS) {
+    aiNamingState.metadataCacheHits += 1
+    return cachedEntry.metadata
+  }
+
+  let metadata
+  try {
+    metadata = await fetchBookmarkMetadataForAi(bookmark.url, timeoutMs, bookmark)
+  } catch (error) {
+    metadata = buildFallbackAiMetadataFromUrl(bookmark.url, {
+      currentTitle: bookmark.title,
+      error
+    })
+  }
+
+  aiNamingState.metadataCache[cacheKey] = {
+    bookmarkId: String(bookmark.id),
+    url: String(bookmark.url || ''),
+    fetchedAt: Date.now(),
+    metadata: normalizeAiMetadata(metadata)
+  }
+  aiNamingState.cacheDirty = true
+  return aiNamingState.metadataCache[cacheKey].metadata
+}
+
+async function fetchBookmarkMetadataForAi(url, timeoutMs, bookmark = null) {
   const response = await fetchWithRequestTimeout(url, {
     method: 'GET',
     cache: 'no-store',
@@ -2629,22 +3014,26 @@ async function fetchBookmarkMetadataForAi(url, timeoutMs) {
   const contentType = String(response.headers.get('content-type') || '').toLowerCase()
 
   if (!contentType.includes('text/html')) {
-    return {
-      finalUrl,
-      title: '',
-      ogTitle: '',
-      twitterTitle: '',
-      h1: '',
-      siteName: '',
-      description: ''
-    }
+    return buildFallbackAiMetadataFromUrl(finalUrl, {
+      currentTitle: bookmark?.title,
+      contentType
+    })
   }
 
   const html = await response.text()
   return {
     finalUrl,
+    contentType,
+    source: 'html',
     ...extractAiMetadataFromHtml(html)
   }
+}
+
+function createAiMetadataCacheKey(bookmark) {
+  return stableHash({
+    bookmarkId: String(bookmark?.id || ''),
+    url: String(bookmark?.url || '')
+  })
 }
 
 async function requestAiNamingConnectivityTest(settings = aiNamingManagerState.settings) {
@@ -2716,6 +3105,100 @@ function normalizeAiMetadataText(value) {
       .replace(/\s+/g, ' ')
       .trim(),
     280
+  )
+}
+
+function buildFallbackAiMetadataFromUrl(url, { currentTitle = '', contentType = '', error = null } = {}) {
+  const finalUrl = String(url || '')
+  const parsed = parseUrlSafely(finalUrl)
+  const hostname = parsed?.hostname.replace(/^www\./i, '') || ''
+  const pathname = parsed?.pathname || ''
+  const filename = decodeURIComponent(pathname.split('/').filter(Boolean).at(-1) || '')
+  const readableFilename = normalizeAiMetadataText(
+    filename
+      .replace(/\.[a-z0-9]{1,8}$/i, '')
+      .replace(/[-_]+/g, ' ')
+  )
+  const lowerUrl = finalUrl.toLowerCase()
+  const lowerContentType = String(contentType || '').toLowerCase()
+  let title = normalizeAiMetadataText(currentTitle)
+  let siteName = hostname
+  let description = ''
+  let source = lowerContentType ? 'non-html' : 'fallback'
+
+  if (lowerContentType.includes('pdf') || /\.pdf($|[?#])/i.test(finalUrl)) {
+    title = readableFilename || title || 'PDF 文档'
+    description = '该书签指向 PDF 文档，已基于文件名和 URL 生成命名线索。'
+    source = 'pdf'
+  } else if (hostname === 'github.com') {
+    const segments = pathname.split('/').filter(Boolean)
+    if (segments.length >= 2) {
+      title = `${segments[0]} / ${segments[1]}`
+      description = segments.length > 2
+        ? `GitHub ${segments.slice(2).join(' / ')}`
+        : 'GitHub repository'
+    }
+    siteName = 'GitHub'
+    source = 'github'
+  } else if (hostname === 'www.npmjs.com' || hostname === 'npmjs.com') {
+    const packageName = pathname.replace(/^\/package\//, '').split('/').filter(Boolean).join('/')
+    title = packageName || title || 'npm package'
+    siteName = 'npm'
+    description = 'npm package page'
+    source = 'npm'
+  } else if (hostname.includes('chromewebstore.google.com')) {
+    title = title || readableFilename || 'Chrome Web Store 扩展'
+    siteName = 'Chrome Web Store'
+    description = 'Chrome Web Store listing'
+    source = 'chrome-web-store'
+  } else if (hostname === 'youtu.be' || hostname.endsWith('youtube.com')) {
+    title = title || 'YouTube 视频'
+    siteName = 'YouTube'
+    description = 'YouTube video or channel page'
+    source = 'youtube'
+  } else if (isDocumentationHost(hostname)) {
+    title = readableFilename || title || hostname
+    siteName = hostname
+    description = 'Documentation page inferred from URL path'
+    source = 'docs'
+  } else {
+    title = readableFilename || title || hostname || finalUrl
+    description = error
+      ? `网页元信息抓取失败：${getAiNamingFailureMessage(error)}`
+      : lowerContentType
+        ? `非 HTML 页面：${lowerContentType}`
+        : '已基于 URL 生成命名线索。'
+  }
+
+  return normalizeAiMetadata({
+    finalUrl,
+    title,
+    ogTitle: '',
+    twitterTitle: '',
+    h1: '',
+    siteName,
+    description,
+    contentType: lowerContentType,
+    source
+  })
+}
+
+function parseUrlSafely(url) {
+  try {
+    return new URL(String(url || ''))
+  } catch {
+    return null
+  }
+}
+
+function isDocumentationHost(hostname) {
+  return (
+    hostname.includes('docs.') ||
+    hostname.includes('developer.') ||
+    hostname.endsWith('.readthedocs.io') ||
+    hostname === 'developer.mozilla.org' ||
+    hostname === 'docs.github.com' ||
+    hostname === 'learn.microsoft.com'
   )
 }
 
@@ -2875,7 +3358,7 @@ function normalizeAiNamingResponseItems(payload, preparedItems) {
     .filter(Boolean)
 }
 
-function mergeAiNamingBatchResults(preparedItems, aiResponseItems) {
+function mergeAiNamingBatchResults(preparedItems, aiResponseItems, settings = aiNamingManagerState.settings) {
   const responseMap = new Map(aiResponseItems.map((item) => [String(item.bookmarkId), item]))
   const failedPreparedItems = []
 
@@ -2888,10 +3371,54 @@ function mergeAiNamingBatchResults(preparedItems, aiResponseItems) {
     }
 
     commitAiNamingResult(bookmark, modelItem)
+    cacheAiNamingModelItem(preparedItem, modelItem, settings)
   }
 
   sortAiNamingResults()
   return failedPreparedItems
+}
+
+function getCachedAiNamingModelItem(preparedItem, settings = aiNamingManagerState.settings) {
+  const cacheKey = createAiResultCacheKey(preparedItem, settings)
+  const entry = aiNamingState.resultCache?.[cacheKey]
+  if (!entry || Date.now() - Number(entry.createdAt || 0) > AI_RESULT_CACHE_TTL_MS) {
+    return null
+  }
+
+  return entry.item || null
+}
+
+function cacheAiNamingModelItem(preparedItem, modelItem, settings = aiNamingManagerState.settings) {
+  const cacheKey = createAiResultCacheKey(preparedItem, settings)
+  if (!cacheKey) {
+    return
+  }
+
+  aiNamingState.resultCache[cacheKey] = {
+    createdAt: Date.now(),
+    item: {
+      bookmarkId: String(modelItem.bookmarkId || preparedItem.bookmark.id),
+      action: modelItem.action,
+      suggestedTitle: cleanAiSuggestedTitle(modelItem.suggestedTitle),
+      confidence: normalizeAiConfidence(modelItem.confidence),
+      reason: String(modelItem.reason || '').replace(/\s+/g, ' ').trim()
+    }
+  }
+  aiNamingState.cacheDirty = true
+}
+
+function createAiResultCacheKey(preparedItem, settings = aiNamingManagerState.settings) {
+  return stableHash({
+    model: settings.model,
+    apiStyle: settings.apiStyle,
+    systemPrompt: settings.systemPrompt || getDefaultAiNamingSystemPrompt(),
+    requestItem: normalizeAiRequestItemForCache(preparedItem.requestItem)
+  })
+}
+
+function normalizeAiRequestItemForCache(requestItem) {
+  const { bookmark_id: _bookmarkId, ...cacheableRequestItem } = requestItem || {}
+  return cacheableRequestItem
 }
 
 function upsertAiNamingResult(result) {
@@ -3034,6 +3561,32 @@ function cleanAiSuggestedTitle(title) {
       .trim(),
     AI_NAMING_MAX_TEXT_LENGTH
   )
+}
+
+function stableHash(value) {
+  const text = stableStringify(value)
+  let hash = 2166136261
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+
+  return `h${(hash >>> 0).toString(16)}`
+}
+
+function stableStringify(value) {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value)
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(',')}]`
+  }
+
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+    .join(',')}}`
 }
 
 function getAiNamingEndpoint(settings) {
@@ -4315,76 +4868,4 @@ function resetDetectionResults() {
   availabilityState.redirectResults = []
   managerState.suppressedResults = []
   managerState.currentHistoryEntries = []
-}
-
-function collectRequestOrigins(bookmarks) {
-  const origins = new Set()
-
-  for (const bookmark of bookmarks) {
-    try {
-      const parsedUrl = new URL(bookmark.url)
-      if (/^https?:$/i.test(parsedUrl.protocol)) {
-        origins.add(`${parsedUrl.origin}/*`)
-      }
-    } catch (error) {
-      continue
-    }
-  }
-
-  return [...origins].sort((left, right) => left.localeCompare(right))
-}
-
-function truncateText(value, maxLength) {
-  const safeText = String(value || '').trim()
-  const limit = Math.max(1, Number(maxLength) || 1)
-  if (safeText.length <= limit) {
-    return safeText
-  }
-
-  return `${safeText.slice(0, Math.max(limit - 1, 1)).trim()}…`
-}
-
-function isCheckableUrl(url) {
-  return /^https?:\/\//i.test(String(url || ''))
-}
-
-function getOriginPermissionPattern(url) {
-  try {
-    const parsedUrl = new URL(String(url || '').trim())
-    if (!/^https?:$/i.test(parsedUrl.protocol)) {
-      return ''
-    }
-
-    return `${parsedUrl.origin}/*`
-  } catch (error) {
-    return ''
-  }
-}
-
-function containsPermissions(query) {
-  return new Promise((resolve, reject) => {
-    chrome.permissions.contains(query, (granted) => {
-      const error = chrome.runtime.lastError
-      if (error) {
-        reject(new Error(error.message))
-        return
-      }
-
-      resolve(Boolean(granted))
-    })
-  })
-}
-
-function requestPermissions(query) {
-  return new Promise((resolve, reject) => {
-    chrome.permissions.request(query, (granted) => {
-      const error = chrome.runtime.lastError
-      if (error) {
-        reject(new Error(error.message))
-        return
-      }
-
-      resolve(Boolean(granted))
-    })
-  })
 }

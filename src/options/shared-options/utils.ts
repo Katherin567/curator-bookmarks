@@ -1,7 +1,11 @@
-// @ts-nocheck
 import { availabilityState } from './state.js'
 
-export function isInteractionLocked() {
+interface PathTitleComparable {
+  path?: string
+  title?: string
+}
+
+export function isInteractionLocked(): boolean {
   return (
     availabilityState.deleting ||
     availabilityState.retestingSelection ||
@@ -10,22 +14,22 @@ export function isInteractionLocked() {
   )
 }
 
-export function compareByPathTitle(left, right) {
+export function compareByPathTitle(left: PathTitleComparable, right: PathTitleComparable): number {
   return (
     String(left.path || '').localeCompare(String(right.path || ''), 'zh-CN') ||
     String(left.title || '').localeCompare(String(right.title || ''), 'zh-CN')
   )
 }
 
-export function syncSelectionSet(selectionSet, validIds) {
+export function syncSelectionSet(selectionSet: Set<unknown>, validIds: Set<string>): void {
   for (const selectedId of [...selectionSet]) {
     if (!validIds.has(String(selectedId))) {
-      selectionSet.delete(String(selectedId))
+      selectionSet.delete(selectedId)
     }
   }
 }
 
-export function formatDateTime(timestamp) {
+export function formatDateTime(timestamp: number): string {
   return new Intl.DateTimeFormat('zh-CN', {
     month: '2-digit',
     day: '2-digit',
@@ -36,7 +40,7 @@ export function formatDateTime(timestamp) {
   }).format(timestamp)
 }
 
-export function setModalHidden(backdrop, open) {
+export function setModalHidden(backdrop: HTMLElement | null | undefined, open: boolean): void {
   if (!backdrop) {
     return
   }
@@ -44,7 +48,8 @@ export function setModalHidden(backdrop, open) {
   if (!open) {
     const active = document.activeElement
     if (active && active !== document.body && backdrop.contains(active)) {
-      active.blur()
+      const activeElement = active as HTMLElement
+      activeElement.blur()
     }
   }
 

@@ -6,40 +6,11 @@ import {
   normalizeUrl
 } from './text.js'
 import { BOOKMARKS_BAR_ID, ROOT_ID } from './constants.js'
-
-interface BookmarkRecord {
-  id: string
-  title: string
-  url: string
-  displayUrl: string
-  normalizedTitle: string
-  normalizedUrl: string
-  duplicateKey: string
-  domain: string
-  path: string
-  ancestorIds: string[]
-  parentId: string
-  index: number
-  dateAdded: number
-}
-
-interface FolderRecord {
-  id: string
-  title: string
-  path: string
-  normalizedTitle: string
-  normalizedPath: string
-  depth: number
-  folderCount: number
-  bookmarkCount: number
-}
-
-interface ExtractedBookmarkData {
-  bookmarks: BookmarkRecord[]
-  folders: FolderRecord[]
-  bookmarkMap: Map<string, BookmarkRecord>
-  folderMap: Map<string, FolderRecord>
-}
+import type {
+  BookmarkRecord,
+  ExtractedBookmarkData,
+  FolderRecord
+} from './types.js'
 
 export function extractBookmarkData(
   rootNode: chrome.bookmarks.BookmarkTreeNode | null | undefined

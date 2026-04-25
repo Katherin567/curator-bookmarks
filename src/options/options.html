@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Curator 设置</title>
+    <title>Curator Bookmark 设置</title>
     <link rel="stylesheet" href="./options.css">
   </head>
   <body>
@@ -15,7 +15,7 @@
           </span>
           <span class="options-brand-copy">
             <span class="options-brand-eyebrow">Chrome Bookmark Manager</span>
-            <strong>Curator</strong>
+            <strong>Curator Bookmark</strong>
           </span>
         </a>
       </header>
@@ -352,7 +352,7 @@
                         </select>
                       </label>
 
-                      <label class="ai-settings-field" for="ai-timeout-ms">
+                      <label class="ai-settings-field hidden" for="ai-timeout-ms">
                         <span>请求超时 (ms)</span>
                         <input
                           id="ai-timeout-ms"
@@ -415,6 +415,7 @@
                 <button id="ai-save-settings" class="options-button secondary" type="button">保存 AI 配置</button>
                 <button id="ai-test-connection" class="options-button secondary" type="button">测试连接</button>
                 <button id="ai-action" class="options-button" type="button">开始生成建议</button>
+                <button id="ai-pause-action" class="options-button secondary small hidden" type="button" disabled>暂停生成</button>
                 <button id="ai-stop-action" class="options-button secondary small hidden" type="button" disabled>停止本次生成</button>
               </div>
             </div>
@@ -487,6 +488,25 @@
                   <p id="ai-results-subtitle" class="detect-results-subtitle">配置 AI 提供方后，开始生成建议，这里会展示当前标题、建议标题、置信度与原因。</p>
                 </div>
                 <span id="ai-result-count" class="option-value">0 条结果</span>
+              </div>
+              <div class="detect-results-header ai-results-filter-row">
+                <div class="detect-results-actions wrap-start">
+                  <select id="ai-filter-status" class="ai-provider-select" aria-label="按状态筛选 AI 命名结果">
+                    <option value="all">全部状态</option>
+                    <option value="suggested">只看建议改名</option>
+                    <option value="changed">只看标题变化大</option>
+                    <option value="manual_review">只看待人工确认</option>
+                    <option value="failed">只看失败</option>
+                  </select>
+                  <select id="ai-filter-confidence" class="ai-provider-select" aria-label="按置信度筛选 AI 命名结果">
+                    <option value="all">全部置信度</option>
+                    <option value="high">只看高置信</option>
+                    <option value="medium">只看中置信</option>
+                    <option value="low">只看低置信</option>
+                  </select>
+                  <input id="ai-filter-query" class="options-search-input compact" type="search" spellcheck="false" placeholder="筛选文件夹或域名">
+                  <button id="ai-clear-filters" class="options-button secondary small" type="button">清空筛选</button>
+                </div>
               </div>
               <div id="ai-results" class="detect-results">
                 <div class="detect-empty">保存 AI 配置并开始生成建议后，这里会展示批量预览结果。</div>

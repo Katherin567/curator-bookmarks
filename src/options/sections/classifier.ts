@@ -1,5 +1,13 @@
-// @ts-nocheck
 import { displayUrl, normalizeText } from '../../shared/text.js'
+import type {
+  AvailabilityResult,
+  BookmarkRecord,
+  NavigationAttempt,
+  NavigationEvidence,
+  NavigationNetworkEvidence,
+  ProbeKind,
+  ProbeResult
+} from '../../shared/types.js'
 
 export const FETCH_TIMEOUT_MS = 20000
 
@@ -60,7 +68,11 @@ const RESTRICTED_STATUS_CODES = new Set([401, 403, 407, 429, 451])
 const MISSING_STATUS_CODES = new Set([404, 410])
 const TEMPORARY_STATUS_CODES = new Set([408, 500, 502, 503, 504, 522, 523, 524])
 
-export function buildNavigationSuccess(bookmark, navigationResult, label) {
+export function buildNavigationSuccess(
+  bookmark: BookmarkRecord,
+  navigationResult: NavigationAttempt,
+  label: string
+): AvailabilityResult {
   const finalUrl = navigationResult.finalUrl || bookmark.url
   const redirected = isRedirectedNavigation(bookmark.url, finalUrl)
 
@@ -75,7 +87,12 @@ export function buildNavigationSuccess(bookmark, navigationResult, label) {
   }
 }
 
-export function buildFailureClassification(bookmark, attempts, probe, probeEnabled) {
+export function buildFailureClassification(
+  bookmark: BookmarkRecord,
+  attempts: NavigationAttempt[],
+  probe: ProbeResult | null,
+  probeEnabled: boolean
+): AvailabilityResult {
   const baseResult = {
     ...bookmark,
     finalUrl: attempts.at(-1)?.finalUrl || bookmark.url
@@ -86,8 +103,11 @@ export function buildFailureClassification(bookmark, attempts, probe, probeEnabl
       return `${index === 0 ? '首轮' : '重试'}：${attempt.detail}`
     })
     .join('；')
+  const requestProbe = classifyNavigationNetworkEvidenceFromAttempts(attempts)
+  const effectiveProbe = chooseEffectiveProbe(probe, requestProbe)
+  const effectiveProbeEnabled = probeEnabled || Boolean(effectiveProbe)
 
-  if (!probeEnabled || !probe) {
+  if (!effectiveProbeEnabled || !effectiveProbe) {
     return {
       ...baseResult,
       status: 'review',
@@ -96,49 +116,49 @@ export function buildFailureClassification(bookmark, attempts, probe, probeEnabl
     }
   }
 
-  if (probe.kind === 'ok') {
+  if (effectiveProbe.kind === 'ok') {
     return {
       ...baseResult,
       status: 'review',
       badgeText: '低置信异常',
-      detail: `${navigationSummary}。但网络探测(${probe.method})返回可访问，站点可能仍可用，暂归为低置信异常，建议人工确认。`
+      detail: `${navigationSummary}。但网络探测(${effectiveProbe.method})返回可访问，站点可能仍可用，暂归为低置信异常，建议人工确认。`
     }
   }
 
-  if (probe.kind === 'restricted') {
+  if (effectiveProbe.kind === 'restricted') {
     return {
       ...baseResult,
       status: 'review',
       badgeText: '受限/低置信',
-      detail: `${navigationSummary}。网络探测(${probe.method})返回 ${probe.label}，站点可能需要登录、地区许可或反爬验证，暂归为低置信异常。`
+      detail: `${navigationSummary}。网络探测(${effectiveProbe.method})返回 ${effectiveProbe.label}，站点可能需要登录、地区许可或反爬验证，暂归为低置信异常。`
     }
   }
 
-  if (probe.kind === 'temporary') {
+  if (effectiveProbe.kind === 'temporary') {
     return {
       ...baseResult,
       status: 'review',
       badgeText: '临时异常',
-      detail: `${navigationSummary}。网络探测(${probe.method})返回 ${probe.label}，更像临时服务异常，不建议直接删除。`
+      detail: `${navigationSummary}。网络探测(${effectiveProbe.method})返回 ${effectiveProbe.label}，更像临时服务异常，不建议直接删除。`
     }
   }
 
-  if (probe.kind === 'missing') {
+  if (effectiveProbe.kind === 'missing') {
     return {
       ...baseResult,
       status: 'failed',
       badgeText: '高置信异常',
-      detail: `${navigationSummary}。网络探测(${probe.method})返回 ${probe.label}，较大概率是失效链接。`
+      detail: `${navigationSummary}。网络探测(${effectiveProbe.method})返回 ${effectiveProbe.label}，较大概率是失效链接。`
     }
   }
 
-  if (probe.kind === 'network') {
-    if (shouldClassifyAsHighConfidence(navigationEvidence, probe.kind)) {
+  if (effectiveProbe.kind === 'network') {
+    if (shouldClassifyAsHighConfidence(navigationEvidence, effectiveProbe.kind)) {
       return {
         ...baseResult,
         status: 'failed',
         badgeText: '高置信异常',
-        detail: `${navigationSummary}。网络探测也失败：${probe.detail}，多层结果都指向连接层故障，已按高置信异常归类。`
+        detail: `${navigationSummary}。网络探测也失败：${effectiveProbe.detail}，多层结果都指向连接层故障，已按高置信异常归类。`
       }
     }
 
@@ -146,17 +166,17 @@ export function buildFailureClassification(bookmark, attempts, probe, probeEnabl
       ...baseResult,
       status: 'review',
       badgeText: '低置信异常',
-      detail: `${navigationSummary}。网络探测也失败：${probe.detail}，证据仍不足以直接删除，暂归为低置信异常。`
+      detail: `${navigationSummary}。网络探测也失败：${effectiveProbe.detail}，证据仍不足以直接删除，暂归为低置信异常。`
     }
   }
 
-  if (probe.kind === 'unknown') {
-    if (shouldClassifyAsHighConfidence(navigationEvidence, probe.kind)) {
+  if (effectiveProbe.kind === 'unknown') {
+    if (shouldClassifyAsHighConfidence(navigationEvidence, effectiveProbe.kind)) {
       return {
         ...baseResult,
         status: 'failed',
         badgeText: '高置信异常',
-        detail: `${navigationSummary}。${probe.detail}，且后台导航连续给出强失败信号，已按高置信异常归类。`
+        detail: `${navigationSummary}。${effectiveProbe.detail}，且后台导航连续给出强失败信号，已按高置信异常归类。`
       }
     }
 
@@ -164,7 +184,7 @@ export function buildFailureClassification(bookmark, attempts, probe, probeEnabl
       ...baseResult,
       status: 'review',
       badgeText: '低置信异常',
-      detail: `${navigationSummary}。${probe.detail} 证据仍不足以直接删除，暂归为低置信异常。`
+      detail: `${navigationSummary}。${effectiveProbe.detail} 证据仍不足以直接删除，暂归为低置信异常。`
     }
   }
 
@@ -172,11 +192,36 @@ export function buildFailureClassification(bookmark, attempts, probe, probeEnabl
     ...baseResult,
     status: 'review',
     badgeText: '低置信异常',
-    detail: `${navigationSummary}。${probe.detail} 暂归为低置信异常，建议人工确认。`
+    detail: `${navigationSummary}。${effectiveProbe.detail} 暂归为低置信异常，建议人工确认。`
   }
 }
 
-export function shouldRetryNavigation(result) {
+function chooseEffectiveProbe(
+  probe: ProbeResult | null,
+  requestProbe: ProbeResult | null
+): ProbeResult | null {
+  if (!probe) {
+    return requestProbe
+  }
+
+  if (!requestProbe) {
+    return probe
+  }
+
+  if (['missing', 'restricted', 'temporary'].includes(requestProbe.kind)) {
+    return requestProbe
+  }
+
+  if (probe.kind === 'unknown' || probe.kind === 'network') {
+    return requestProbe.kind === 'unknown' || requestProbe.kind === 'network'
+      ? probe
+      : requestProbe
+  }
+
+  return probe
+}
+
+export function shouldRetryNavigation(result: NavigationAttempt | null | undefined): boolean {
   if (!result || result.status === 'available') {
     return false
   }
@@ -184,7 +229,16 @@ export function shouldRetryNavigation(result) {
   return RETRYABLE_NAVIGATION_ERRORS.has(result.errorCode)
 }
 
-export function summarizeNavigationEvidence(attempts) {
+export function shouldAcceptNavigationSuccess(result: NavigationAttempt | null | undefined): boolean {
+  if (!result || result.status !== 'available') {
+    return false
+  }
+
+  const statusCode = Number(result.networkEvidence?.statusCode) || 0
+  return !statusCode || statusCode < 400
+}
+
+export function summarizeNavigationEvidence(attempts: NavigationAttempt[]): NavigationEvidence {
   const errorCodes = attempts
     .map((attempt) => String(attempt?.errorCode || '').trim())
     .filter(Boolean)
@@ -212,7 +266,10 @@ export function summarizeNavigationEvidence(attempts) {
   }
 }
 
-export function shouldClassifyAsHighConfidence(navigationEvidence, probeKind) {
+export function shouldClassifyAsHighConfidence(
+  navigationEvidence: NavigationEvidence | null | undefined,
+  probeKind: ProbeKind | string
+): boolean {
   if (
     !navigationEvidence ||
     navigationEvidence.hasClientBlockingError ||
@@ -233,11 +290,14 @@ export function shouldClassifyAsHighConfidence(navigationEvidence, probeKind) {
   return false
 }
 
-export function shouldFallbackToGet(statusCode) {
+export function shouldFallbackToGet(statusCode: number): boolean {
   return [401, 403, 405, 429, 451, 500, 501, 502, 503, 504].includes(statusCode)
 }
 
-export function classifyProbeResponse(response, method) {
+export function classifyProbeResponse(
+  response: Pick<Response, 'ok' | 'status' | 'redirected' | 'url'>,
+  method: string
+): ProbeResult {
   const statusCode = response.status || 0
   const label = `HTTP ${statusCode}`
 
@@ -287,8 +347,154 @@ export function classifyProbeResponse(response, method) {
   }
 }
 
-export function classifyProbeError(error) {
-  if (error?.name === 'AbortError') {
+export function classifyNavigationNetworkEvidence(
+  evidence: NavigationNetworkEvidence | null | undefined
+): ProbeResult | null {
+  if (!evidence) {
+    return null
+  }
+
+  const method = '主请求'
+  const statusCode = Number(evidence.statusCode) || 0
+  const failedBeforeCompletion = Boolean(
+    evidence.errorCode && !Number.isFinite(evidence.timing?.completedMs)
+  )
+  if (failedBeforeCompletion) {
+    return {
+      kind: 'network',
+      method,
+      label: '主请求失败',
+      detail: formatNavigationNetworkEvidence(evidence) || `主请求失败：${evidence.errorCode}。`
+    }
+  }
+
+  if (statusCode > 0) {
+    return classifyHttpStatusProbe(statusCode, method, formatNavigationNetworkEvidence(evidence))
+  }
+
+  if (evidence.errorCode) {
+    return {
+      kind: 'network',
+      method,
+      label: '主请求失败',
+      detail: formatNavigationNetworkEvidence(evidence) || `主请求失败：${evidence.errorCode}。`
+    }
+  }
+
+  if (evidence.requestSent) {
+    return {
+      kind: 'unknown',
+      method,
+      label: '主请求未完成',
+      detail: formatNavigationNetworkEvidence(evidence) || '主请求已发出，但未收到可分类响应。'
+    }
+  }
+
+  return null
+}
+
+export function classifyNavigationNetworkEvidenceFromAttempts(
+  attempts: NavigationAttempt[]
+): ProbeResult | null {
+  for (let index = attempts.length - 1; index >= 0; index -= 1) {
+    const probe = classifyNavigationNetworkEvidence(attempts[index]?.networkEvidence)
+    if (probe) {
+      return probe
+    }
+  }
+
+  return null
+}
+
+function classifyHttpStatusProbe(statusCode: number, method: string, detail: string): ProbeResult {
+  const label = `HTTP ${statusCode}`
+
+  if (statusCode >= 200 && statusCode < 400) {
+    return {
+      kind: 'ok',
+      method,
+      label,
+      detail
+    }
+  }
+
+  if (MISSING_STATUS_CODES.has(statusCode)) {
+    return {
+      kind: 'missing',
+      method,
+      label,
+      detail
+    }
+  }
+
+  if (RESTRICTED_STATUS_CODES.has(statusCode)) {
+    return {
+      kind: 'restricted',
+      method,
+      label,
+      detail
+    }
+  }
+
+  if (TEMPORARY_STATUS_CODES.has(statusCode)) {
+    return {
+      kind: 'temporary',
+      method,
+      label,
+      detail
+    }
+  }
+
+  return {
+    kind: 'unknown',
+    method,
+    label,
+    detail
+  }
+}
+
+export function formatNavigationNetworkEvidence(
+  evidence: NavigationNetworkEvidence | null | undefined
+): string {
+  if (!evidence) {
+    return ''
+  }
+
+  const fragments = []
+  if (evidence.statusCode) {
+    fragments.push(`主请求返回 HTTP ${evidence.statusCode}`)
+  } else if (evidence.errorCode) {
+    fragments.push(`主请求失败：${evidence.errorCode}`)
+  } else if (evidence.requestSent) {
+    fragments.push('主请求已发出但未收到响应')
+  } else {
+    fragments.push('主请求未发出')
+  }
+
+  if (evidence.redirects?.length) {
+    fragments.push(`重定向 ${evidence.redirects.length} 次`)
+  }
+
+  const responseLatencyMs = evidence.timing?.responseLatencyMs
+  const totalMs = evidence.timing?.totalMs
+  if (Number.isFinite(responseLatencyMs)) {
+    fragments.push(`响应头 ${Math.round(Number(responseLatencyMs))}ms`)
+  }
+
+  if (Number.isFinite(totalMs)) {
+    fragments.push(`总耗时 ${Math.round(Number(totalMs))}ms`)
+  }
+
+  return `${fragments.join('，')}。`
+}
+
+export function classifyProbeError(error: unknown): ProbeResult {
+  const errorName =
+    error && typeof error === 'object'
+      ? String((error as { name?: unknown }).name || '')
+      : ''
+
+  if (errorName === 'AbortError') {
     return {
       kind: 'unknown',
       method: 'GET',
@@ -314,11 +520,11 @@ export function classifyProbeError(error) {
   }
 }
 
-export function isRedirectedNavigation(originalUrl, finalUrl) {
+export function isRedirectedNavigation(originalUrl: unknown, finalUrl: unknown): boolean {
   return normalizeNavigationUrl(originalUrl) !== normalizeNavigationUrl(finalUrl)
 }
 
-export function normalizeNavigationUrl(url) {
+export function normalizeNavigationUrl(url: unknown): string {
   try {
     const parsedUrl = new URL(String(url || ''))
     parsedUrl.hash = ''
@@ -331,7 +537,7 @@ export function normalizeNavigationUrl(url) {
   }
 }
 
-function normalizeNavigationPathname(pathname) {
+function normalizeNavigationPathname(pathname: unknown): string {
   const normalizedPath = String(pathname || '/')
     .replace(/\/{2,}/g, '/')
     .replace(/\/+$/, '')
@@ -339,7 +545,7 @@ function normalizeNavigationPathname(pathname) {
   return normalizedPath || '/'
 }
 
-function normalizeNavigationSearch(search) {
+function normalizeNavigationSearch(search: string): string {
   if (!search) {
     return ''
   }

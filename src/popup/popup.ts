@@ -33,6 +33,8 @@ import { getLocalStorage, setLocalStorage } from '../shared/storage.js'
 
 const SEARCH_DEBOUNCE_MS = 140
 const MAX_RESULTS = 20
+const SEARCH_CACHE_LIMIT = 40
+const SEARCH_PREFILTER_THRESHOLD = 1200
 
 const state = {
   isLoading: true,
@@ -53,6 +55,9 @@ const state = {
   searchResults: [],
   activeResultIndex: 0,
   searchTimer: null,
+  searchCache: new Map(),
+  filteredBookmarksCacheKey: '',
+  filteredBookmarksCache: [],
   activeMenuBookmarkId: null,
   moveTargetBookmarkId: null,
   moveSearchQuery: '',
@@ -184,10 +189,13 @@ async function refreshData({ initial = false, preserveSearch = true } = {}) {
     state.bookmarksBarNode = findBookmarksBar(rootNode)
 
     const extracted = extractBookmarkData(rootNode)
+    const indexedBookmarks = extracted.bookmarks.map(indexBookmarkForSearch)
     state.allBookmarks = extracted.bookmarks
+    state.allBookmarks = indexedBookmarks
     state.allFolders = extracted.folders
-    state.bookmarkMap = extracted.bookmarkMap
+    state.bookmarkMap = new Map(indexedBookmarks.map((bookmark) => [bookmark.id, bookmark]))
     state.folderMap = extracted.folderMap
+    clearSearchCaches()
 
     const folderIds = new Set(extracted.folders.map((folder) => folder.id))
     const defaultExpanded = getDefaultExpandedFolders(state.bookmarksBarNode)
@@ -266,15 +274,24 @@ function setSearchQuery(value, { immediate = false } = {}) {
 
 function runSearch() {
   const query = state.debouncedQuery
+  const normalizedQuery = normalizeQuery(query)
 
-  if (!query) {
+  if (!normalizedQuery) {
     state.searchResults = []
     state.activeResultIndex = 0
     return
   }
 
   try {
-    state.searchResults = searchBookmarks(query, getFilteredBookmarks()).slice(0, MAX_RESULTS)
+    const cacheKey = getSearchCacheKey(normalizedQuery)
+    const cachedResults = state.searchCache.get(cacheKey)
+    const results = cachedResults || searchBookmarks(normalizedQuery, getFilteredBookmarks())
+
+    if (!cachedResults) {
+      cacheSearchResults(cacheKey, results)
+    }
+
+    state.searchResults = results.slice(0, MAX_RESULTS)
     state.activeResultIndex = Math.min(
       state.activeResultIndex,
       Math.max(state.searchResults.length - 1, 0)
@@ -1250,8 +1267,9 @@ function updateActiveSearchResult(previousIndex, nextIndex) {
 function searchBookmarks(query, bookmarks) {
   const normalizedQuery = normalizeQuery(query)
   const queryTerms = getQueryTerms(normalizedQuery)
+  const candidates = getSearchCandidates(bookmarks, normalizedQuery, queryTerms)
 
-  return bookmarks
+  return candidates
     .map((bookmark) => {
       const score = scoreBookmark(bookmark, normalizedQuery, queryTerms)
       return score > 0 ? { ...bookmark, score } : null
@@ -1268,6 +1286,34 @@ function searchBookmarks(query, bookmarks) {
 
       return left.path.localeCompare(right.path, 'zh-Hans-CN')
     })
+}
+
+function getSearchCandidates(bookmarks, normalizedQuery, queryTerms) {
+  if (bookmarks.length < SEARCH_PREFILTER_THRESHOLD) {
+    return bookmarks
+  }
+
+  const requiredTerms = queryTerms.length ? queryTerms : [normalizedQuery]
+  const directMatches = bookmarks.filter((bookmark) => {
+    const searchText = bookmark.searchText || `${bookmark.normalizedTitle} ${bookmark.normalizedUrl}`
+    return requiredTerms.every((term) => searchText.includes(term))
+  })
+
+  if (directMatches.length) {
+    return directMatches
+  }
+
+  const prefix = normalizedQuery.slice(0, Math.min(normalizedQuery.length, 3))
+  if (!prefix) {
+    return bookmarks
+  }
+
+  const prefixMatches = bookmarks.filter((bookmark) => {
+    const searchText = bookmark.searchText || `${bookmark.normalizedTitle} ${bookmark.normalizedUrl}`
+    return searchText.includes(prefix)
+  })
+
+  return prefixMatches.length ? prefixMatches : bookmarks
 }
 
 function scoreBookmark(bookmark, normalizedQuery, queryTerms) {
@@ -1393,13 +1439,59 @@ function getCurrentTreeRoot() {
 }
 
 function getFilteredBookmarks() {
-  if (!state.selectedFolderFilterId) {
-    return state.allBookmarks
+  const cacheKey = state.selectedFolderFilterId || 'all'
+  if (state.filteredBookmarksCacheKey === cacheKey) {
+    return state.filteredBookmarksCache
   }
 
-  return state.allBookmarks.filter((bookmark) => {
-    return bookmark.ancestorIds.includes(state.selectedFolderFilterId)
-  })
+  const bookmarks = state.selectedFolderFilterId
+    ? state.allBookmarks.filter((bookmark) => {
+        return bookmark.ancestorIds.includes(state.selectedFolderFilterId)
+      })
+    : state.allBookmarks
+
+  state.filteredBookmarksCacheKey = cacheKey
+  state.filteredBookmarksCache = bookmarks
+  return bookmarks
+}
+
+function indexBookmarkForSearch(bookmark) {
+  const normalizedPath = normalizeText(bookmark.path || '')
+  const normalizedDomain = normalizeText(bookmark.domain || '')
+  return {
+    ...bookmark,
+    normalizedPath,
+    searchText: [
+      bookmark.normalizedTitle,
+      bookmark.normalizedUrl,
+      normalizedPath,
+      normalizedDomain
+    ]
+      .filter(Boolean)
+      .join(' ')
+  }
+}
+
+function getSearchCacheKey(normalizedQuery) {
+  return `${state.selectedFolderFilterId || 'all'}\u0000${normalizedQuery}`
+}
+
+function cacheSearchResults(cacheKey, results) {
+  state.searchCache.set(cacheKey, results)
+  if (state.searchCache.size <= SEARCH_CACHE_LIMIT) {
+    return
+  }
+
+  const oldestKey = state.searchCache.keys().next().value
+  if (oldestKey) {
+    state.searchCache.delete(oldestKey)
+  }
+}
+
+function clearSearchCaches() {
+  state.searchCache.clear()
+  state.filteredBookmarksCacheKey = ''
+  state.filteredBookmarksCache = []
 }
 
 function hasOpenModal() {

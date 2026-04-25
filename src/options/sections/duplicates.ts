@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { displayUrl } from '../../shared/text.js'
 import { availabilityState, managerState } from '../shared-options/state.js'
 import { dom } from '../shared-options/dom.js'

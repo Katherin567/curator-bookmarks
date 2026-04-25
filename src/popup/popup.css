@@ -103,6 +103,11 @@ input:focus-visible {
   outline: none;
 }
 
+button:focus-visible {
+  outline: 2px solid rgba(245, 245, 247, 0.72);
+  outline-offset: 2px;
+}
+
 .hidden {
   display: none !important;
 }
@@ -188,10 +193,10 @@ input:focus-visible {
   flex: none;
   display: grid;
   place-items: center;
-  border-radius: 17px;
-  border: 1px solid #343438;
-  background: #1c1c1e;
-  color: rgba(245, 245, 247, 0.78);
+  border-radius: 10px;
+  border: 1px solid rgba(245, 245, 247, 0.32);
+  background: #171719;
+  color: rgba(245, 245, 247, 0.9);
   transition:
     background var(--ease-standard),
     border-color var(--ease-standard),
@@ -207,8 +212,8 @@ input:focus-visible {
 
 .hero-settings-button:hover,
 .hero-settings-button:focus-visible {
-  border-color: #4a4a4f;
-  background: #2c2c2e;
+  border-color: rgba(245, 245, 247, 0.58);
+  background: #26262a;
   color: var(--text);
 }
 
@@ -322,20 +327,23 @@ input:focus-visible {
 
 .clear-search {
   padding: 8px 12px;
-  border-radius: 999px;
-  background: #2c2c2e;
-  color: var(--text-soft);
+  border: 1px solid rgba(245, 245, 247, 0.3);
+  border-radius: 9px;
+  background: #171719;
+  color: var(--text);
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 650;
   transition:
     background var(--ease-standard),
+    border-color var(--ease-standard),
     color var(--ease-standard),
     transform var(--ease-snappy);
 }
 
 .clear-search:hover,
 .clear-search:focus-visible {
-  background: #3a3a3c;
+  border-color: rgba(245, 245, 247, 0.58);
+  background: #26262a;
   color: var(--text);
 }
 
@@ -390,15 +398,25 @@ input:focus-visible {
 
 .filter-clear {
   flex: none;
+  border-radius: 10px;
+  border-color: rgba(245, 245, 247, 0.88);
+  background: #f5f5f7;
+  color: #111113;
+  font-weight: 700;
 }
 
 .filter-trigger:hover,
-.filter-trigger:focus-visible,
-.filter-clear:hover,
-.filter-clear:focus-visible {
+.filter-trigger:focus-visible {
   border-color: #4a4a4f;
   background: #2c2c2e;
   color: var(--text);
+}
+
+.filter-clear:hover,
+.filter-clear:focus-visible {
+  border-color: #ffffff;
+  background: #ffffff;
+  color: #111113;
 }
 
 .filter-trigger:active,
@@ -764,8 +782,8 @@ input:focus-visible {
 .tree-toggle:focus-visible,
 .icon-button:hover,
 .icon-button:focus-visible {
-  border-color: #3a3a3c;
-  background: #2c2c2e;
+  border-color: rgba(245, 245, 247, 0.58);
+  background: #26262a;
 }
 
 .tree-toggle:active,
@@ -789,10 +807,10 @@ input:focus-visible {
   width: 36px;
   height: 36px;
   flex: none;
-  border-radius: 14px;
-  border: 1px solid transparent;
-  color: var(--text-soft);
-  background: #2c2c2e;
+  border-radius: 9px;
+  border: 1px solid rgba(245, 245, 247, 0.28);
+  color: var(--text);
+  background: #202024;
   transition:
     background var(--ease-standard),
     border-color var(--ease-standard),
@@ -815,18 +833,18 @@ input:focus-visible {
   width: auto;
   height: auto;
   padding: 10px 14px;
-  border-radius: 999px;
-  border-color: #3a3a3c;
-  background: #2c2c2e;
+  border-radius: 9px;
+  border-color: rgba(245, 245, 247, 0.34);
+  background: #171719;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 650;
 }
 
 .icon-button.ghost:hover,
 .icon-button.ghost:focus-visible {
   color: var(--text);
-  border-color: #4a4a4f;
-  background: #343438;
+  border-color: rgba(245, 245, 247, 0.58);
+  background: #26262a;
 }
 
 .menu-anchor {
@@ -1124,23 +1142,25 @@ mark {
 }
 
 .primary-button {
-  border-color: #6a6a70;
-  background: #3a3a3c;
-  color: #ffffff;
+  border-color: rgba(245, 245, 247, 0.92);
+  background: #f5f5f7;
+  color: #111113;
 }
 
 .primary-button:hover,
 .primary-button:focus-visible {
-  background: #48484d;
+  border-color: #ffffff;
+  background: #ffffff;
+  color: #111113;
 }
 
 .secondary-button,
 .danger-button {
   min-width: 114px;
   padding: 13px 16px;
-  border-radius: 16px;
+  border-radius: 10px;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: -0.01em;
   transition:
     background var(--ease-standard),
@@ -1151,26 +1171,28 @@ mark {
 }
 
 .secondary-button {
-  border: 1px solid #3a3a3c;
-  background: #2c2c2e;
-  color: var(--text-soft);
+  border: 1px solid rgba(245, 245, 247, 0.34);
+  background: #171719;
+  color: var(--text);
 }
 
 .secondary-button:hover,
 .secondary-button:focus-visible {
   color: var(--text);
-  background: #343438;
+  border-color: rgba(245, 245, 247, 0.58);
+  background: #26262a;
 }
 
 .danger-button {
-  background: #402321;
-  color: #ffc4bf;
-  border: 1px solid rgba(255, 138, 130, 0.24);
+  background: #5a2624;
+  color: #ffe7e3;
+  border: 1px solid rgba(255, 138, 130, 0.62);
 }
 
 .danger-button:hover,
 .danger-button:focus-visible {
-  background: #542b28;
+  border-color: rgba(255, 183, 176, 0.86);
+  background: #73302c;
 }
 
 .secondary-button:active,
@@ -1230,13 +1252,15 @@ mark {
 .toast-action,
 .toast-dismiss {
   padding: 8px 10px;
-  border-radius: 12px;
-  background: #2c2c2e;
-  color: var(--text-soft);
+  border: 1px solid rgba(245, 245, 247, 0.3);
+  border-radius: 9px;
+  background: #171719;
+  color: var(--text);
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 650;
   transition:
     background var(--ease-standard),
+    border-color var(--ease-standard),
     color var(--ease-standard),
     transform var(--ease-snappy);
 }
@@ -1245,7 +1269,8 @@ mark {
 .toast-action:focus-visible,
 .toast-dismiss:hover,
 .toast-dismiss:focus-visible {
-  background: #343438;
+  border-color: rgba(245, 245, 247, 0.58);
+  background: #26262a;
   color: var(--text);
 }
 

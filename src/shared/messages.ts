@@ -1,9 +1,17 @@
+import type { NavigationNetworkEvidence } from './types.js'
+
 type NavigationStatus = 'available' | 'failed'
 
 export interface NavigationCheckMessage {
   type: 'availability:navigate'
   url: string
   timeoutMs?: number
+  checkId?: string
+}
+
+export interface NavigationCancelMessage {
+  type: 'availability:cancel'
+  checkId: string
 }
 
 export interface NavigationCheckResult {
@@ -11,6 +19,7 @@ export interface NavigationCheckResult {
   finalUrl: string
   detail: string
   errorCode: string
+  networkEvidence?: NavigationNetworkEvidence
 }
 
 interface NavigationCheckResponse {
@@ -21,10 +30,16 @@ interface NavigationCheckResponse {
 
 export function requestNavigationCheck(
   url: string,
-  timeoutMs?: number
+  timeoutMs?: number,
+  checkId?: string
 ): Promise<NavigationCheckResult> {
-  const message: NavigationCheckMessage = { type: 'availability:navigate', url, timeoutMs }
+  const message: NavigationCheckMessage = { type: 'availability:navigate', url, timeoutMs, checkId }
   return sendRuntimeMessage<NavigationCheckResult>(message)
+}
+
+export function cancelNavigationCheck(checkId: string): Promise<void> {
+  const message: NavigationCancelMessage = { type: 'availability:cancel', checkId }
+  return sendRuntimeMessage<void>(message)
 }
 
 function sendRuntimeMessage<TResult>(message: unknown): Promise<TResult> {

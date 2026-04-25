@@ -6,7 +6,9 @@ export const STORAGE_KEYS = {
   detectionHistory: 'curatorBookmarkDetectionHistory',
   redirectCache: 'curatorBookmarkRedirectCache',
   recycleBin: 'curatorBookmarkRecycleBin',
-  aiNamingSettings: 'curatorBookmarkAiNamingSettings'
+  aiNamingSettings: 'curatorBookmarkAiNamingSettings',
+  aiMetadataCache: 'curatorBookmarkAiMetadataCache',
+  aiResultCache: 'curatorBookmarkAiResultCache'
 } as const
 
 type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS]

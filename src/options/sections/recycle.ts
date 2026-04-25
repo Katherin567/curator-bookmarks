@@ -1,4 +1,3 @@
-// @ts-nocheck
 import {
   BOOKMARKS_BAR_ID,
   STORAGE_KEYS,
@@ -246,7 +245,7 @@ export async function clearRecycleBin(callbacks) {
   callbacks.renderAvailabilitySection()
 }
 
-export async function deleteBookmarksToRecycle(bookmarkIds, source, callbacks) {
+export async function deleteBookmarksToRecycle(bookmarkIds: unknown[], source: string, callbacks: any) {
   const uniqueIds = [...new Set(bookmarkIds.map((id) => String(id)).filter(Boolean))]
   if (!uniqueIds.length) {
     return

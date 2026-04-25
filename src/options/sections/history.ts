@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { STORAGE_KEYS } from '../../shared/constants.js'
 import { setLocalStorage } from '../../shared/storage.js'
 import { displayUrl } from '../../shared/text.js'

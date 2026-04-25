@@ -1,28 +1,44 @@
 import type {
+  NavigationCancelMessage,
   NavigationCheckMessage,
   NavigationCheckResult
 } from '../shared/messages.js'
+import type { NavigationNetworkEvidence } from '../shared/types.js'
 
 interface PendingCheckState {
   tabId: number
+  checkId: string
   requestedUrl: string
   lastUrl: string
   navigationStarted: boolean
   settled: boolean
   timeoutId: number
+  networkEvidence: NavigationNetworkEvidence | null
   resolve: (result: NavigationCheckResult) => void
 }
 
 const pendingChecks = new Map<number, PendingCheckState>()
+const pendingCheckIds = new Map<string, number>()
+const mainFrameRequestFilter: chrome.webRequest.RequestFilter = {
+  urls: ['http://*/*', 'https://*/*'],
+  types: ['main_frame']
+}
 
-chrome.runtime.onMessage.addListener((message: NavigationCheckMessage, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message: NavigationCheckMessage | NavigationCancelMessage, _sender, sendResponse) => {
+  if (message?.type === 'availability:cancel') {
+    cancelNavigationCheck(message.checkId)
+    sendResponse({ ok: true })
+    return undefined
+  }
+
   if (message?.type !== 'availability:navigate') {
     return undefined
   }
 
   performNavigationCheck({
     url: message.url,
-    timeoutMs: message.timeoutMs
+    timeoutMs: message.timeoutMs,
+    checkId: message.checkId
   })
     .then((result) => {
       sendResponse({ ok: true, result })
@@ -105,12 +121,86 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   )
 })
 
+chrome.webRequest.onBeforeRequest.addListener((details) => {
+  const state = getPendingRequestState(details)
+  if (!state) {
+    return
+  }
+
+  getOrCreateNetworkEvidence(state, details)
+}, mainFrameRequestFilter)
+
+chrome.webRequest.onBeforeRedirect.addListener((details) => {
+  const state = getPendingRequestState(details)
+  if (!state) {
+    return
+  }
+
+  const evidence = getOrCreateNetworkEvidence(state, details)
+  const elapsedMs = getElapsedMs(evidence.timing.requestStartMs, details.timeStamp)
+  evidence.redirects.push({
+    url: details.url,
+    redirectUrl: details.redirectUrl,
+    statusCode: Number(details.statusCode) || 0,
+    ...(Number.isFinite(elapsedMs) ? { elapsedMs } : {})
+  })
+  evidence.statusCode = Number(details.statusCode) || evidence.statusCode
+  evidence.statusLine = details.statusLine || evidence.statusLine
+  evidence.finalUrl = details.redirectUrl || evidence.finalUrl
+  evidence.fromCache = Boolean(details.fromCache)
+}, mainFrameRequestFilter)
+
+chrome.webRequest.onHeadersReceived.addListener((details) => {
+  const state = getPendingRequestState(details)
+  if (!state) {
+    return
+  }
+
+  const evidence = getOrCreateNetworkEvidence(state, details)
+  evidence.statusCode = Number(details.statusCode) || evidence.statusCode
+  evidence.statusLine = details.statusLine || evidence.statusLine
+  evidence.finalUrl = details.url || evidence.finalUrl
+  if (!Number.isFinite(evidence.timing.responseStartMs)) {
+    evidence.timing.responseStartMs = details.timeStamp
+  }
+  evidence.timing.responseLatencyMs = getElapsedMs(evidence.timing.requestStartMs, evidence.timing.responseStartMs)
+}, mainFrameRequestFilter)
+
+chrome.webRequest.onCompleted.addListener((details) => {
+  const state = getPendingRequestState(details)
+  if (!state) {
+    return
+  }
+
+  const evidence = getOrCreateNetworkEvidence(state, details)
+  evidence.statusCode = Number(details.statusCode) || evidence.statusCode
+  evidence.finalUrl = details.url || evidence.finalUrl
+  evidence.fromCache = Boolean(details.fromCache)
+  evidence.timing.completedMs = details.timeStamp
+  evidence.timing.totalMs = getElapsedMs(evidence.timing.requestStartMs, evidence.timing.completedMs)
+}, mainFrameRequestFilter)
+
+chrome.webRequest.onErrorOccurred.addListener((details) => {
+  const state = getPendingRequestState(details)
+  if (!state) {
+    return
+  }
+
+  const evidence = getOrCreateNetworkEvidence(state, details)
+  evidence.errorCode = details.error || evidence.errorCode
+  evidence.finalUrl = details.url || evidence.finalUrl
+  evidence.timing.failedMs = details.timeStamp
+  evidence.timing.totalMs = getElapsedMs(evidence.timing.requestStartMs, evidence.timing.failedMs)
+}, mainFrameRequestFilter)
+
 async function performNavigationCheck({
   url,
-  timeoutMs
+  timeoutMs,
+  checkId
 }: {
   url: string
   timeoutMs?: number
+  checkId?: string
 }): Promise<NavigationCheckResult> {
   if (!/^https?:\/\//i.test(String(url || ''))) {
     throw new Error('仅支持检测 http/https 书签。')
@@ -129,15 +219,20 @@ async function performNavigationCheck({
   return new Promise<NavigationCheckResult>((resolve) => {
     const state: PendingCheckState = {
       tabId: tab.id!,
+      checkId: String(checkId || ''),
       requestedUrl: url,
       lastUrl: url,
       navigationStarted: false,
       settled: false,
       timeoutId: 0,
+      networkEvidence: null,
       resolve
     }
 
     pendingChecks.set(tab.id!, state)
+    if (state.checkId) {
+      pendingCheckIds.set(state.checkId, tab.id!)
+    }
 
     state.timeoutId = self.setTimeout(() => {
       finalizeNavigationCheck(tab.id!, {
@@ -156,6 +251,21 @@ async function performNavigationCheck({
         errorCode: 'tab-update-failed'
       })
     })
+  })
+}
+
+function cancelNavigationCheck(checkId: string): void {
+  const tabId = pendingCheckIds.get(String(checkId || ''))
+  if (!tabId) {
+    return
+  }
+
+  const state = pendingChecks.get(tabId)
+  finalizeNavigationCheck(tabId, {
+    status: 'failed',
+    finalUrl: state?.lastUrl || state?.requestedUrl || '',
+    detail: '后台导航检测已取消。',
+    errorCode: 'cancelled'
   })
 }
 
@@ -181,6 +291,9 @@ function finalizeNavigationCheck(
 
   state.settled = true
   pendingChecks.delete(tabId)
+  if (state.checkId) {
+    pendingCheckIds.delete(state.checkId)
+  }
 
   if (state.timeoutId) {
     clearTimeout(state.timeoutId)
@@ -190,11 +303,102 @@ function finalizeNavigationCheck(
     closeTab(tabId).catch(() => {})
   }
 
-  state.resolve(result)
+  state.resolve(attachNetworkEvidence(state, result))
 }
 
 function isAboutBlank(url: string | undefined): boolean {
   return String(url || '').startsWith('about:blank')
+}
+
+function getPendingRequestState(
+  details: { frameId?: number; tabId?: number } | null | undefined
+): PendingCheckState | null {
+  if (!details || details.frameId !== 0 || typeof details.tabId !== 'number' || details.tabId < 0) {
+    return null
+  }
+
+  return pendingChecks.get(details.tabId) || null
+}
+
+function getOrCreateNetworkEvidence(
+  state: PendingCheckState,
+  details: {
+    requestId?: string
+    method?: string
+    url?: string
+    timeStamp?: number
+  }
+): NavigationNetworkEvidence {
+  if (!state.networkEvidence) {
+    state.networkEvidence = {
+      requestSent: true,
+      requestId: details.requestId,
+      method: details.method,
+      requestedUrl: state.requestedUrl,
+      finalUrl: details.url || state.lastUrl || state.requestedUrl,
+      redirects: [],
+      timing: {
+        requestStartMs: normalizeTimestamp(details.timeStamp)
+      }
+    }
+    return state.networkEvidence
+  }
+
+  state.networkEvidence.requestSent = true
+  state.networkEvidence.requestId = details.requestId || state.networkEvidence.requestId
+  state.networkEvidence.method = details.method || state.networkEvidence.method
+  state.networkEvidence.finalUrl = details.url || state.networkEvidence.finalUrl
+  if (!Number.isFinite(state.networkEvidence.timing.requestStartMs)) {
+    state.networkEvidence.timing.requestStartMs = normalizeTimestamp(details.timeStamp)
+  }
+
+  return state.networkEvidence
+}
+
+function attachNetworkEvidence(
+  state: PendingCheckState,
+  result: NavigationCheckResult
+): NavigationCheckResult {
+  const evidence = cloneNetworkEvidence(state.networkEvidence)
+  if (!evidence) {
+    return result
+  }
+
+  evidence.finalUrl = evidence.finalUrl || result.finalUrl || state.lastUrl || state.requestedUrl
+  return {
+    ...result,
+    finalUrl: result.finalUrl || evidence.finalUrl || state.lastUrl || state.requestedUrl,
+    networkEvidence: evidence
+  }
+}
+
+function cloneNetworkEvidence(
+  evidence: NavigationNetworkEvidence | null
+): NavigationNetworkEvidence | null {
+  if (!evidence) {
+    return null
+  }
+
+  return {
+    ...evidence,
+    redirects: evidence.redirects.map((redirect) => ({ ...redirect })),
+    timing: { ...evidence.timing }
+  }
+}
+
+function normalizeTimestamp(value: unknown): number | undefined {
+  const timestamp = Number(value)
+  return Number.isFinite(timestamp) ? timestamp : undefined
+}
+
+function getElapsedMs(startMs: unknown, endMs: unknown): number | undefined {
+  const start = Number(startMs)
+  const end = Number(endMs)
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return undefined
+  }
+
+  return Math.max(0, end - start)
 }
 
 function normalizeTimeout(value: unknown): number {

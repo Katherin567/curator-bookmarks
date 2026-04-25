@@ -1,13 +1,18 @@
 {
   "name": "curator-bookmarks",
   "private": true,
-  "version": "1.2.0",
+  "version": "1.2.3",
   "description": "Curator — Chrome 本地书签管理扩展",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "typecheck": "tsc --noEmit"
+    "check:version": "node scripts/check-version.mjs",
+    "validate": "npm run typecheck && npm test && npm run check:version && npm run build",
+    "pack:zip": "npm run validate && node scripts/pack-release.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run test:build && node --test .tmp-test/tests/*.test.js",
+    "test:build": "tsc -p tsconfig.test.json"
   },
   "devDependencies": {
     "@crxjs/vite-plugin": "^2.0.0-beta.28",
