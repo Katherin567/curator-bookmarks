@@ -27,3 +27,17 @@ export function setLocalStorage(payload: Record<string, unknown>): Promise<void>
     })
   })
 }
+
+export function removeLocalStorage(keys: string | string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.remove(keys, () => {
+      const error = chrome.runtime.lastError
+      if (error) {
+        reject(new Error(error.message))
+        return
+      }
+
+      resolve()
+    })
+  })
+}

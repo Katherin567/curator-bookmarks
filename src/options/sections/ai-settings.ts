@@ -15,6 +15,8 @@ export interface AiNamingSettings {
   timeoutMs: number
   batchSize: number
   autoSelectHighConfidence: boolean
+  allowRemoteParsing: boolean
+  autoAnalyzeBookmarks: boolean
   systemPrompt: string
 }
 
@@ -28,6 +30,8 @@ interface AiNamingSettingsSource {
   timeoutMs?: unknown
   batchSize?: unknown
   autoSelectHighConfidence?: unknown
+  allowRemoteParsing?: unknown
+  autoAnalyzeBookmarks?: unknown
   systemPrompt?: unknown
 }
 
@@ -57,6 +61,14 @@ export function normalizeAiNamingSettings(rawSettings: unknown): AiNamingSetting
       typeof source.autoSelectHighConfidence === 'boolean'
         ? source.autoSelectHighConfidence
         : defaults.autoSelectHighConfidence,
+    allowRemoteParsing:
+      typeof source.allowRemoteParsing === 'boolean'
+        ? source.allowRemoteParsing
+        : defaults.allowRemoteParsing,
+    autoAnalyzeBookmarks:
+      typeof source.autoAnalyzeBookmarks === 'boolean'
+        ? source.autoAnalyzeBookmarks
+        : defaults.autoAnalyzeBookmarks,
     systemPrompt: String(source.systemPrompt || defaults.systemPrompt).trim()
   }
 }
@@ -104,6 +116,8 @@ export function serializeAiNamingSettings(settings: unknown): AiNamingSettings {
     timeoutMs: normalized.timeoutMs,
     batchSize: normalized.batchSize,
     autoSelectHighConfidence: normalized.autoSelectHighConfidence,
+    allowRemoteParsing: normalized.allowRemoteParsing,
+    autoAnalyzeBookmarks: normalized.autoAnalyzeBookmarks,
     systemPrompt: normalized.systemPrompt
   }
 }

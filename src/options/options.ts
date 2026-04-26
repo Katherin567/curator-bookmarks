@@ -7,6 +7,7 @@ import {
 } from '../shared/constants.js'
 import {
   getLocalStorage,
+  removeLocalStorage,
   setLocalStorage
 } from '../shared/storage.js'
 import {
@@ -49,6 +50,15 @@ import {
   normalizeNavigationUrl
 } from './sections/classifier.js'
 import {
+  buildFallbackPageContentFromUrl,
+  buildJinaReaderUrl,
+  buildPageContextForAi,
+  buildRemotePageContentFromText,
+  combinePageContentContexts,
+  extractPageContentFromHtml,
+  normalizePageContentContext
+} from './sections/content-extraction.js'
+import {
   SECTION_META,
   NAVIGATION_TIMEOUT_MS,
   NAVIGATION_RETRY_TIMEOUT_MS,
@@ -58,6 +68,7 @@ import {
   AI_NAMING_DEFAULT_TIMEOUT_MS,
   AI_NAMING_DEFAULT_BATCH_SIZE,
   AI_NAMING_MAX_TEXT_LENGTH,
+  AI_NAMING_JINA_READER_ORIGIN,
   AI_NAMING_MODELS_ENDPOINT_SUFFIX,
   AI_NAMING_PRESET_MODELS,
   AI_NAMING_RESPONSE_SCHEMA
@@ -141,13 +152,19 @@ import {
   syncHistoryEntryStatus,
   upsertAvailabilityHistoryEntry
 } from './sections/history.js'
+import {
+  hydrateBookmarkAddHistory,
+  renderBookmarkAddHistory,
+  clearBookmarkAddHistory
+} from './sections/bookmark-add-history.js'
 
 let availabilityRenderFrame = 0
 let availabilityPauseResolvers = []
 
-const AI_METADATA_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000
-const AI_RESULT_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000
-const AI_CACHE_LIMIT = 2500
+const LEGACY_AI_NAMING_CACHE_STORAGE_KEYS = [
+  'curatorBookmarkAiMetadataCache',
+  'curatorBookmarkAiResultCache'
+]
 
 const recycleCallbacks = {
   renderAvailabilitySection,
@@ -179,7 +196,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   bindEvents()
 
   if (!SECTION_META[getCurrentSectionKey()]) {
-    window.history.replaceState(null, '', '#availability')
+    window.history.replaceState(null, '', '#general')
   }
 
   syncPageSection()
@@ -200,20 +217,19 @@ async function hydratePersistentState() {
     const stored = await getLocalStorage([
       STORAGE_KEYS.ignoreRules,
       STORAGE_KEYS.detectionHistory,
+      STORAGE_KEYS.bookmarkAddHistory,
       STORAGE_KEYS.redirectCache,
       STORAGE_KEYS.recycleBin,
-      STORAGE_KEYS.aiNamingSettings,
-      STORAGE_KEYS.aiMetadataCache,
-      STORAGE_KEYS.aiResultCache
+      STORAGE_KEYS.aiProviderSettings
     ])
 
     managerState.ignoreRules = normalizeIgnoreRules(stored[STORAGE_KEYS.ignoreRules])
     hydrateDetectionHistory(stored[STORAGE_KEYS.detectionHistory], historyCallbacks)
+    hydrateBookmarkAddHistory(stored[STORAGE_KEYS.bookmarkAddHistory])
     managerState.redirectCache = normalizeRedirectCache(stored[STORAGE_KEYS.redirectCache])
     managerState.recycleBin = normalizeRecycleBin(stored[STORAGE_KEYS.recycleBin])
-    aiNamingManagerState.settings = normalizeAiNamingSettings(stored[STORAGE_KEYS.aiNamingSettings])
-    aiNamingState.metadataCache = normalizeAiMetadataCache(stored[STORAGE_KEYS.aiMetadataCache])
-    aiNamingState.resultCache = normalizeAiResultCache(stored[STORAGE_KEYS.aiResultCache])
+    aiNamingManagerState.settings = normalizeAiNamingSettings(stored[STORAGE_KEYS.aiProviderSettings])
+    void removeLocalStorage(LEGACY_AI_NAMING_CACHE_STORAGE_KEYS).catch(() => {})
   } catch (error) {
     availabilityState.lastError =
       error instanceof Error ? error.message : '本地规则读取失败，请刷新页面后重试。'
@@ -226,129 +242,32 @@ async function hydratePersistentState() {
 async function saveAiNamingSettings(settings = aiNamingManagerState.settings) {
   aiNamingManagerState.settings = normalizeAiNamingSettings(settings)
   await setLocalStorage({
-    [STORAGE_KEYS.aiNamingSettings]: serializeAiNamingSettings(aiNamingManagerState.settings)
+    [STORAGE_KEYS.aiProviderSettings]: serializeAiNamingSettings(aiNamingManagerState.settings)
   })
-}
-
-function normalizeAiMetadataCache(rawCache) {
-  return normalizeAiCacheRecord(rawCache, AI_METADATA_CACHE_TTL_MS, (entry) => {
-    const metadata = entry?.metadata
-    if (!metadata || typeof metadata !== 'object') {
-      return null
-    }
-
-    return {
-      bookmarkId: String(entry.bookmarkId || '').trim(),
-      url: String(entry.url || '').trim(),
-      fetchedAt: Number(entry.fetchedAt) || 0,
-      metadata: normalizeAiMetadata(metadata)
-    }
-  })
-}
-
-function normalizeAiResultCache(rawCache) {
-  return normalizeAiCacheRecord(rawCache, AI_RESULT_CACHE_TTL_MS, (entry) => {
-    const item = entry?.item
-    if (!item || typeof item !== 'object') {
-      return null
-    }
-
-    return {
-      createdAt: Number(entry.createdAt) || 0,
-      item: {
-        bookmarkId: String(item.bookmarkId || '').trim(),
-        action: ['rename', 'keep', 'manual_review'].includes(String(item.action || ''))
-          ? String(item.action)
-          : 'manual_review',
-        suggestedTitle: cleanAiSuggestedTitle(item.suggestedTitle),
-        confidence: normalizeAiConfidence(item.confidence),
-        reason: String(item.reason || '').replace(/\s+/g, ' ').trim()
-      }
-    }
-  })
-}
-
-function normalizeAiCacheRecord(rawCache, ttlMs, normalizeEntry) {
-  const source = rawCache && typeof rawCache === 'object' ? rawCache : {}
-  const now = Date.now()
-  const entries = Object.entries(source)
-    .map(([key, value]) => {
-      const normalized = normalizeEntry(value)
-      if (!normalized) {
-        return null
-      }
-
-      const timestamp = Number(normalized.fetchedAt || normalized.createdAt) || 0
-      if (!timestamp || now - timestamp > ttlMs) {
-        return null
-      }
-
-      return [String(key), normalized]
-    })
-    .filter(Boolean)
-    .sort((left, right) => {
-      const leftTime = Number(left[1].fetchedAt || left[1].createdAt) || 0
-      const rightTime = Number(right[1].fetchedAt || right[1].createdAt) || 0
-      return rightTime - leftTime
-    })
-    .slice(0, AI_CACHE_LIMIT)
-
-  return Object.fromEntries(entries)
-}
-
-function normalizeAiMetadata(metadata) {
-  return {
-    finalUrl: String(metadata.finalUrl || ''),
-    title: normalizeAiMetadataText(metadata.title || ''),
-    ogTitle: normalizeAiMetadataText(metadata.ogTitle || ''),
-    twitterTitle: normalizeAiMetadataText(metadata.twitterTitle || ''),
-    h1: normalizeAiMetadataText(metadata.h1 || ''),
-    siteName: normalizeAiMetadataText(metadata.siteName || ''),
-    description: normalizeAiMetadataText(metadata.description || ''),
-    contentType: String(metadata.contentType || '').slice(0, 120),
-    source: String(metadata.source || '').slice(0, 80)
-  }
-}
-
-async function saveAiNamingCaches({ force = false } = {}) {
-  if (!force && !aiNamingState.cacheDirty) {
-    return
-  }
-
-  aiNamingState.metadataCache = pruneAiCache(aiNamingState.metadataCache, AI_CACHE_LIMIT, 'fetchedAt')
-  aiNamingState.resultCache = pruneAiCache(aiNamingState.resultCache, AI_CACHE_LIMIT, 'createdAt')
-  await setLocalStorage({
-    [STORAGE_KEYS.aiMetadataCache]: aiNamingState.metadataCache,
-    [STORAGE_KEYS.aiResultCache]: aiNamingState.resultCache
-  })
-  aiNamingState.cacheDirty = false
-}
-
-function pruneAiCache(cache, limit, timestampKey) {
-  return Object.fromEntries(
-    Object.entries(cache || {})
-      .sort((left, right) => {
-        return (Number(right[1]?.[timestampKey]) || 0) - (Number(left[1]?.[timestampKey]) || 0)
-      })
-      .slice(0, limit)
-  )
 }
 
 function syncPageSection() {
   const rawKey = getCurrentSectionKey()
-  const key = SECTION_META[rawKey] ? rawKey : 'availability'
+  const key = SECTION_META[rawKey] ? rawKey : 'general'
   const section = SECTION_META[key]
   const links = document.querySelectorAll('[data-section-link]')
   const panels = document.querySelectorAll('[data-section-panel]')
+  const availabilitySectionKeys = new Set(['availability', 'history', 'redirects', 'ignore'])
 
   if (rawKey !== key) {
     window.history.replaceState(null, '', `#${key}`)
   }
 
   links.forEach((link) => {
-    const isActive = link.getAttribute('data-section-link') === key
+    const linkKey = link.getAttribute('data-section-link')
+    const isExactActive = linkKey === key
+    const isAvailabilityRootActive =
+      link.classList.contains('options-nav-link') &&
+      linkKey === 'availability' &&
+      availabilitySectionKeys.has(key)
+    const isActive = isExactActive || isAvailabilityRootActive
     link.classList.toggle('active', isActive)
-    if (isActive) {
+    if (isExactActive) {
       link.setAttribute('aria-current', 'page')
     } else {
       link.removeAttribute('aria-current')
@@ -358,6 +277,11 @@ function syncPageSection() {
   panels.forEach((panel) => {
     panel.hidden = panel.getAttribute('data-section-panel') !== key
   })
+
+  document.getElementById('availability-related-nav')?.classList.toggle(
+    'hidden',
+    !availabilitySectionKeys.has(key)
+  )
 
   document.title = `${section.title} · Curator Bookmark`
 
@@ -404,6 +328,8 @@ function bindEvents() {
   dom.aiTimeoutMs?.addEventListener('input', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
   dom.aiBatchSize?.addEventListener('input', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
   dom.aiAutoSelectHigh?.addEventListener('change', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
+  dom.aiAllowRemoteParser?.addEventListener('change', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
+  dom.aiAutoAnalyzeBookmarks?.addEventListener('change', handleAutoAnalyzeBookmarksChange)
   dom.aiSystemPrompt?.addEventListener('input', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
   dom.availabilityAction?.addEventListener('click', handleAvailabilityAction)
   dom.availabilityPauseAction?.addEventListener('click', toggleAvailabilityPause)
@@ -412,6 +338,7 @@ function bindEvents() {
   dom.availabilityResults?.addEventListener('click', handleFailedResultAction)
   dom.availabilityClearHistory?.addEventListener('click', () => clearDetectionHistoryLogs(historyCallbacks))
   dom.availabilityToggleHistoryLogs?.addEventListener('click', () => toggleHistoryLogsCollapsed(historyCallbacks))
+  dom.bookmarkAddHistoryClear?.addEventListener('click', () => clearBookmarkAddHistory({ renderAvailabilitySection }))
   dom.availabilityClearSelection?.addEventListener('click', clearAvailabilitySelection)
   dom.availabilitySelectionRetest?.addEventListener('click', retestSelectedAvailabilityResults)
   dom.availabilitySelectionPromote?.addEventListener('click', () => {
@@ -518,7 +445,7 @@ function bindEvents() {
 }
 
 function getCurrentSectionKey() {
-  return window.location.hash.replace(/^#/, '') || 'availability'
+  return window.location.hash.replace(/^#/, '') || 'general'
 }
 
 function handleKeydown(event) {
@@ -759,8 +686,6 @@ function getCurrentAiNamingScopeMeta() {
 
 function resetAiNamingRunState() {
   aiNamingState.checkedBookmarks = 0
-  aiNamingState.metadataCacheHits = 0
-  aiNamingState.resultCacheHits = 0
   aiNamingState.paused = false
   aiNamingState.pauseResolvers = []
   aiNamingState.suggestedCount = 0
@@ -1388,7 +1313,7 @@ function renderAvailabilitySection() {
 }
 
 function renderActiveOptionsSection() {
-  const activeSection = SECTION_META[getCurrentSectionKey()] ? getCurrentSectionKey() : 'availability'
+  const activeSection = SECTION_META[getCurrentSectionKey()] ? getCurrentSectionKey() : 'general'
 
   if (activeSection === 'availability') {
     renderAvailabilitySelectionGroup()
@@ -1399,6 +1324,16 @@ function renderActiveOptionsSection() {
 
   if (activeSection === 'history') {
     renderAvailabilityHistory(historyCallbacks)
+    return
+  }
+
+  if (activeSection === 'bookmark-history') {
+    renderBookmarkAddHistory()
+    return
+  }
+
+  if (activeSection === 'general') {
+    renderAiNamingSection()
     return
   }
 
@@ -1442,6 +1377,8 @@ function syncAiNamingSettingsDraftFromDom({ markDirty = false } = {}) {
     timeoutMs: dom.aiTimeoutMs.value,
     batchSize: dom.aiBatchSize.value,
     autoSelectHighConfidence: dom.aiAutoSelectHigh.checked,
+    allowRemoteParsing: Boolean(dom.aiAllowRemoteParser?.checked),
+    autoAnalyzeBookmarks: Boolean(dom.aiAutoAnalyzeBookmarks?.checked),
     systemPrompt: dom.aiSystemPrompt.value
   })
 
@@ -1461,18 +1398,53 @@ function resetAiNamingConnectivityState() {
   aiNamingState.lastConnectivityTestMessage = ''
 }
 
-async function saveAiNamingSettingsFromDom() {
+async function saveAiNamingSettingsFromDom({ validateRequired = true } = {}) {
   try {
     const settings = syncAiNamingSettingsDraftFromDom()
-    validateAiNamingSettings(settings)
+    if (validateRequired || settings.autoAnalyzeBookmarks) {
+      validateAiNamingSettings(settings)
+    }
+    if (settings.autoAnalyzeBookmarks) {
+      const providerGranted = await ensureAiNamingProviderPermission({
+        interactive: true,
+        baseUrl: settings.baseUrl
+      })
+      if (!providerGranted) {
+        throw new Error('未授予 AI 服务地址访问权限，无法开启自动分析。')
+      }
+      if (settings.allowRemoteParsing) {
+        const jinaGranted = await requestPermissions({ origins: [AI_NAMING_JINA_READER_ORIGIN] })
+        if (!jinaGranted) {
+          throw new Error('未授予 Jina Reader 访问权限，无法开启远程解析自动分析。')
+        }
+      }
+    }
     await saveAiNamingSettings(settings)
     aiNamingState.settingsDirty = false
     aiNamingState.lastError = ''
     await hydrateAiNamingPermissionState()
+    return true
   } catch (error) {
     aiNamingState.lastError =
-      error instanceof Error ? error.message : 'AI 配置保存失败，请稍后重试。'
+      error instanceof Error ? error.message : 'AI 渠道保存失败，请稍后重试。'
+    return false
   } finally {
+    renderAvailabilitySection()
+  }
+}
+
+async function handleAutoAnalyzeBookmarksChange() {
+  if (!dom.aiAutoAnalyzeBookmarks) {
+    return
+  }
+
+  const previousSettings = normalizeAiNamingSettings(aiNamingManagerState.settings)
+  const saved = await saveAiNamingSettingsFromDom({
+    validateRequired: Boolean(dom.aiAutoAnalyzeBookmarks.checked)
+  })
+  if (!saved) {
+    aiNamingManagerState.settings = previousSettings
+    dom.aiAutoAnalyzeBookmarks.checked = Boolean(previousSettings.autoAnalyzeBookmarks)
     renderAvailabilitySection()
   }
 }
@@ -1548,6 +1520,22 @@ function renderAiNamingSection() {
   if (dom.aiAutoSelectHigh) {
     dom.aiAutoSelectHigh.checked = Boolean(settings.autoSelectHighConfidence)
   }
+  if (dom.aiAllowRemoteParser) {
+    dom.aiAllowRemoteParser.checked = Boolean(settings.allowRemoteParsing)
+  }
+  if (dom.aiAutoAnalyzeBookmarks) {
+    dom.aiAutoAnalyzeBookmarks.checked = Boolean(settings.autoAnalyzeBookmarks)
+    dom.aiAutoAnalyzeBookmarks.disabled =
+      aiNamingState.running ||
+      aiNamingState.applying ||
+      aiNamingState.testingConnection ||
+      aiNamingState.requestingPermission
+  }
+  if (dom.aiAutoAnalyzeStatus) {
+    const autoAnalyzeEnabled = Boolean(settings.autoAnalyzeBookmarks)
+    dom.aiAutoAnalyzeStatus.className = `options-chip ai-inline-status ${autoAnalyzeEnabled ? 'success' : 'muted'}`
+    dom.aiAutoAnalyzeStatus.textContent = autoAnalyzeEnabled ? '自动分析开启' : '未开启'
+  }
   if (dom.aiSystemPrompt && dom.aiSystemPrompt !== document.activeElement) {
     dom.aiSystemPrompt.value = settings.systemPrompt
   }
@@ -1567,14 +1555,22 @@ function renderAiNamingSection() {
 
   if (dom.aiProviderNoticeText) {
     dom.aiProviderNoticeText.textContent = aiNamingState.settingsDirty
-      ? '有未保存的配置改动。API Key 仅保存在当前扩展的本地存储里。'
+      ? '有未保存改动，保存后会用于所有 AI 功能。'
       : hasRequiredConfig
-        ? '已填写密钥和模型，可以直接生成建议。API Key 仅保存在当前扩展的本地存储里。'
-        : '需要填写密钥后才可用。API Key 仅保存在当前扩展的本地存储里。'
+        ? '配置已保存，可继续获取模型或测试连接。'
+        : '填写 API Key 后即可获取模型并测试连接。'
   }
 
-  dom.aiConfigStatus.className = `options-chip ${configTone}`
+  dom.aiConfigStatus.className = `options-chip ai-provider-status-chip ${configTone}`
   dom.aiConfigStatus.textContent = configText
+  if (dom.aiSaveStatus) {
+    dom.aiSaveStatus.className = `ai-provider-save-state ${configTone}`
+    dom.aiSaveStatus.textContent = aiNamingState.settingsDirty
+      ? '有未保存改动'
+      : hasRequiredConfig
+        ? '已保存'
+        : '待配置'
+  }
   if (dom.aiManageModels) {
     dom.aiManageModels.disabled = aiNamingState.running || aiNamingState.applying || aiNamingState.testingConnection
   }
@@ -1585,7 +1581,7 @@ function renderAiNamingSection() {
       aiNamingState.testingConnection ||
       aiNamingState.fetchingModels ||
       aiNamingState.requestingPermission
-    dom.aiFetchModels.textContent = aiNamingState.fetchingModels ? '拉取中…' : '获取模型'
+    dom.aiFetchModels.textContent = aiNamingState.fetchingModels ? '获取中…' : '获取模型'
   }
   if (dom.aiConnectivityCopy) {
     dom.aiConnectivityCopy.className = `ai-provider-connectivity ${connectivityMeta.tone}`
@@ -1631,9 +1627,13 @@ function renderAiNamingSection() {
   dom.aiStopAction.classList.toggle('hidden', !aiNamingState.running)
   dom.aiStopAction.disabled = !aiNamingState.running || aiNamingState.stopRequested
   dom.aiStopAction.textContent = aiNamingState.stopRequested ? '停止中…' : '停止本次生成'
+  const showSaveSettingsButton = aiNamingState.settingsDirty || !hasRequiredConfig
+  dom.aiSaveSettings.classList.toggle('hidden', !showSaveSettingsButton)
+  dom.aiSaveSettings.classList.remove('secondary')
   dom.aiSaveSettings.disabled = aiNamingState.running || aiNamingState.applying || aiNamingState.testingConnection
-  dom.aiSaveSettings.textContent = aiNamingState.settingsDirty || !hasRequiredConfig ? '保存 AI 配置' : '已保存配置'
+  dom.aiSaveSettings.textContent = '保存设置'
   if (dom.aiTestConnection) {
+    dom.aiTestConnection.classList.toggle('secondary', showSaveSettingsButton)
     dom.aiTestConnection.disabled =
       !hasRequiredConfig ||
       aiNamingState.testingConnection ||
@@ -1673,8 +1673,8 @@ function renderAiNamingSection() {
     ? `${aiNamingState.results.length} 条结果`
     : `${visibleAiResults.length} / ${aiNamingState.results.length} 条结果`
   dom.aiResultsSubtitle.textContent = aiNamingState.lastCompletedAt
-    ? `最近一次完成于 ${formatDateTime(aiNamingState.lastCompletedAt)}。建议改名 ${aiNamingState.suggestedCount} 条，待确认 ${aiNamingState.manualReviewCount} 条，失败 ${aiNamingState.failedCount} 条。缓存命中：网页 ${aiNamingState.metadataCacheHits} 条，AI ${aiNamingState.resultCacheHits} 条。`
-    : '配置 AI 提供方后，开始生成建议，这里会展示当前标题、建议标题、置信度与原因。'
+    ? `最近一次完成于 ${formatDateTime(aiNamingState.lastCompletedAt)}。建议改名 ${aiNamingState.suggestedCount} 条，待确认 ${aiNamingState.manualReviewCount} 条，失败 ${aiNamingState.failedCount} 条。网页内容与 AI 建议每次都会重新生成。`
+    : '在通用设置中配置 AI 渠道后，开始生成建议，这里会展示当前标题、建议标题、置信度与原因。'
 
   renderAiResultsFilterControls()
 
@@ -1728,18 +1728,18 @@ function renderAiFetchModelsStatus() {
   }
 
   let tone = 'muted'
-  let copy = '点击「获取模型」可从当前 Base URL + API Key 拉取后端实际支持的模型列表。'
+  let copy = '填写 API Key 后，可从当前接口获取模型列表。'
 
   if (aiNamingState.fetchingModels) {
     tone = 'muted'
-    copy = '正在从 API 拉取模型列表…'
+    copy = '正在获取模型列表…'
   } else if (aiNamingState.lastFetchModelsError) {
     tone = 'danger'
-    copy = `拉取失败：${aiNamingState.lastFetchModelsError}`
+    copy = `获取失败：${aiNamingState.lastFetchModelsError}`
   } else if (aiNamingState.lastFetchModelsAt) {
     tone = 'success'
     const timeLabel = formatDateTime(aiNamingState.lastFetchModelsAt)
-    copy = `已拉取 ${aiNamingState.lastFetchModelsCount} 个模型 · ${timeLabel}`
+    copy = `已获取 ${aiNamingState.lastFetchModelsCount} 个模型 · ${timeLabel}`
   }
 
   dom.aiFetchModelsStatus.className = `ai-provider-connectivity ${tone}`
@@ -2133,7 +2133,7 @@ function renderAiNamingResults() {
       ? `<div class="detect-empty">${escapeHtml(aiNamingState.lastError)}</div>`
       : aiNamingState.lastCompletedAt
         ? '<div class="detect-empty">最近一次生成已完成，当前没有待处理的 AI 命名结果。</div>'
-        : '<div class="detect-empty">保存 AI 配置并开始生成建议后，这里会展示批量预览结果。</div>'
+        : '<div class="detect-empty">保存 AI 渠道并开始生成建议后，这里会展示批量预览结果。</div>'
     return
   }
 
@@ -2175,7 +2175,12 @@ function getVisibleAiNamingResults() {
         result.domain,
         result.url,
         result.currentTitle,
-        result.suggestedTitle
+        result.suggestedTitle,
+        result.summary,
+        result.contentType,
+        result.suggestedFolder,
+        ...(Array.isArray(result.topics) ? result.topics : []),
+        ...(Array.isArray(result.tags) ? result.tags : [])
       ].join(' '))
       if (!haystack.includes(normalizedQuery)) {
         return false
@@ -2238,6 +2243,18 @@ function buildAiNamingResultCard(result) {
         ? 'warning'
         : 'muted'
   const statusLabel = getAiNamingStatusLabel(result)
+  const topics = Array.isArray(result.topics) ? result.topics : []
+  const tags = Array.isArray(result.tags) ? result.tags : []
+  const detailRows = [
+    result.summary ? `摘要：${result.summary}` : '',
+    result.contentType || topics.length
+      ? `类型：${result.contentType || '未分类'}${topics.length ? ` · 主题：${topics.join(' / ')}` : ''}`
+      : '',
+    result.suggestedFolder ? `推荐文件夹：${result.suggestedFolder}` : '',
+    tags.length ? `标签：${tags.join(' / ')}` : '',
+    result.extractionStatus ? `内容来源：${getAiExtractionLabel(result.extractionStatus, result.extractionSource)}` : '',
+    result.reason || result.detail || ''
+  ].filter(Boolean)
 
   return `
     <article class="detect-result-card ${isSelected ? 'selected' : ''}">
@@ -2254,6 +2271,7 @@ function buildAiNamingResultCard(result) {
           </label>
           <span class="options-chip ${badgeTone}">${escapeHtml(statusLabel)}</span>
           <span class="options-chip muted">${escapeHtml(getAiNamingConfidenceLabel(result.confidence))}</span>
+          ${Number.isFinite(Number(result.confidenceScore)) ? `<span class="options-chip muted">${escapeHtml(Math.round(Number(result.confidenceScore) * 100))}%</span>` : ''}
         </div>
         <div class="detect-result-actions">
           <a class="detect-result-open" href="${escapeAttr(result.url)}" target="_blank" rel="noreferrer noopener">打开页面</a>
@@ -2265,7 +2283,7 @@ function buildAiNamingResultCard(result) {
         <p class="ai-result-suggested">${escapeHtml(result.suggestedTitle || '未生成建议标题')}</p>
         <p class="detect-result-url">${escapeHtml(displayUrl(result.url))}</p>
         <p class="detect-result-path">${escapeHtml(result.path || '未归档路径')}</p>
-        <p class="detect-result-detail">${escapeHtml(result.reason || result.detail || '')}</p>
+        ${detailRows.map((detail) => `<p class="detect-result-detail">${escapeHtml(detail)}</p>`).join('')}
       </div>
     </article>
   `
@@ -2487,7 +2505,6 @@ async function ensureAiNamingProviderPermission({ interactive = true, baseUrl = 
 function getAiNamingPermissionOrigins() {
   const origins = new Set(
     aiNamingState.bookmarks
-      .filter((bookmark) => !hasFreshAiMetadataCache(bookmark))
       .flatMap((bookmark) => {
         const origin = getOriginPermissionPattern(bookmark.url)
         return origin ? [origin] : []
@@ -2497,13 +2514,10 @@ function getAiNamingPermissionOrigins() {
   if (providerOrigin) {
     origins.add(providerOrigin)
   }
+  if (aiNamingManagerState.settings.allowRemoteParsing) {
+    origins.add(AI_NAMING_JINA_READER_ORIGIN)
+  }
   return [...origins]
-}
-
-function hasFreshAiMetadataCache(bookmark) {
-  const cacheKey = createAiMetadataCacheKey(bookmark)
-  const entry = aiNamingState.metadataCache?.[cacheKey]
-  return Boolean(entry && Date.now() - Number(entry.fetchedAt || 0) <= AI_METADATA_CACHE_TTL_MS)
 }
 
 function getAiNamingProviderPermissionOrigin(baseUrl = aiNamingManagerState.settings.baseUrl) {
@@ -2647,15 +2661,15 @@ function getAiNamingStatusCopy() {
   }
 
   if (aiNamingState.testingConnection) {
-    return '系统正在测试当前 AI 服务连通性。'
+    return '正在测试当前模型，请稍候。'
   }
 
   if (!aiNamingManagerState.settings.apiKey || !aiNamingManagerState.settings.model) {
-    return '请先填写并保存 Base URL、API Key 与 AI 模型，然后再启动智能命名。'
+    return '请先在“通用设置 > 自定义 AI 渠道”填写 API Key 并选择模型。'
   }
 
   if (aiNamingState.settingsDirty) {
-    return 'AI 配置已经修改但尚未保存；开始生成前会自动按当前输入内容保存。'
+    return '设置已修改，开始生成前会自动按当前输入保存。'
   }
 
   if (aiNamingState.running) {
@@ -2663,33 +2677,38 @@ function getAiNamingStatusCopy() {
       return 'AI 命名已暂停。继续后会保留当前结果并从下一条书签继续处理。'
     }
 
-    return '系统正在抓取网页元信息并调用 AI 生成命名建议。你可以随时停止当前批次。'
+    return aiNamingManagerState.settings.allowRemoteParsing
+      ? '正在结合本地内容和 Jina Reader 解析结果生成建议。你可以随时停止当前批次。'
+      : '正在读取网页内容并生成命名建议。你可以随时停止当前批次。'
   }
 
   if (aiNamingState.lastCompletedAt) {
     return `最近一次 AI 命名建议完成于 ${formatDateTime(aiNamingState.lastCompletedAt)}。`
   }
 
-  return '保存配置后，系统会先抓取网页标题与元信息，再分批调用 AI 生成命名建议。建议生成后，你可以先预览并手动选择要应用的标题。'
+  return '配置 AI 渠道后，可批量生成更适合收藏和检索的书签标题。应用前你可以逐条预览。'
 }
 
 function getAiNamingProgressCopy() {
   const scopeMeta = getCurrentAiNamingScopeMeta()
-  return `当前范围：${scopeMeta.label}。本轮会处理 ${aiNamingState.eligibleBookmarks} 条 http/https 书签，并调用模型 ${aiNamingManagerState.settings.model || '未配置'} 生成建议。`
+  const remoteCopy = aiNamingManagerState.settings.allowRemoteParsing
+    ? '已开启 Jina Reader 远程解析，本轮会结合本地抽取与远程解析内容。'
+    : '仅使用本地网页抓取与内容抽取。'
+  return `当前范围：${scopeMeta.label}。本轮会处理 ${aiNamingState.eligibleBookmarks} 条 http/https 书签，并调用模型 ${aiNamingManagerState.settings.model || '未配置'} 生成建议。${remoteCopy}`
 }
 
 function getAiNamingConnectivityMeta() {
   if (aiNamingState.testingConnection) {
     return {
       tone: 'warning',
-      copy: '正在测试当前 AI 接口连通性，请稍候。'
+      copy: '正在测试当前模型，请稍候。'
     }
   }
 
   if (aiNamingState.lastConnectivityTestStatus === 'success') {
     return {
       tone: 'success',
-      copy: `${aiNamingState.lastConnectivityTestMessage || '连通性测试通过。'}${aiNamingState.settingsDirty ? '当前改动尚未保存。' : ''}`
+      copy: `${aiNamingState.lastConnectivityTestMessage || '连接成功，当前模型可用。'}${aiNamingState.settingsDirty ? ' 当前改动尚未保存。' : ''}`
     }
   }
 
@@ -2702,7 +2721,7 @@ function getAiNamingConnectivityMeta() {
 
   return {
     tone: 'muted',
-    copy: '连通性测试会向当前接口发送一条最小请求，用于验证 Base URL、API Key、模型与接口类型是否可用。'
+    copy: '测试连接后，会显示当前模型是否可用。'
   }
 }
 
@@ -2736,6 +2755,26 @@ function getAiNamingConfidenceLabel(confidence) {
   }
 
   return '未分类'
+}
+
+function getAiExtractionLabel(status, source = '') {
+  const sourceLabel = source ? ` / ${source}` : ''
+  if (status === 'combined') {
+    return `本地 + Jina Reader 联合解析${sourceLabel}`
+  }
+  if (status === 'remote') {
+    return `远程解析${sourceLabel}`
+  }
+  if (status === 'ok') {
+    return `本地正文抽取${sourceLabel}`
+  }
+  if (status === 'limited') {
+    return `本地内容不足${sourceLabel}`
+  }
+  if (status === 'failed') {
+    return `抓取失败${sourceLabel}`
+  }
+  return `URL 推断${sourceLabel}`
 }
 
 async function runAiNamingSuggestions() {
@@ -2793,35 +2832,18 @@ async function runAiNamingSuggestions() {
         continue
       }
 
-      const uncachedPreparedItems = []
-      for (const preparedItem of preparedItems) {
-        const cachedModelItem = getCachedAiNamingModelItem(preparedItem, settings)
-        if (cachedModelItem) {
-          commitAiNamingResult(preparedItem.bookmark, cachedModelItem, settings)
-          aiNamingState.resultCacheHits += 1
-        } else {
-          uncachedPreparedItems.push(preparedItem)
-        }
-      }
-
-      if (!uncachedPreparedItems.length) {
-        recalculateAiNamingSummary()
-        scheduleAvailabilityRender()
-        await saveAiNamingCaches()
-        continue
-      }
-
       try {
-        const aiResponseItems = await requestAiNamingBatch(uncachedPreparedItems)
-        const failedPreparedItems = mergeAiNamingBatchResults(uncachedPreparedItems, aiResponseItems, settings)
+        const aiResponseItems = await requestAiNamingBatch(preparedItems)
+        const failedPreparedItems = mergeAiNamingBatchResults(preparedItems, aiResponseItems, settings)
         retryCandidates.push(...failedPreparedItems.map((preparedItem) => {
           return {
             bookmark: preparedItem.bookmark,
+            preparedItem,
             initialError: new Error('AI 返回中缺少该书签的命名结果。')
           }
         }))
       } catch (error) {
-        retryCandidates.push(...uncachedPreparedItems.map((preparedItem) => {
+        retryCandidates.push(...preparedItems.map((preparedItem) => {
           return {
             bookmark: preparedItem.bookmark,
             initialError: error
@@ -2834,7 +2856,6 @@ async function runAiNamingSuggestions() {
       }
 
       recalculateAiNamingSummary()
-      await saveAiNamingCaches()
       scheduleAvailabilityRender()
     }
 
@@ -2848,7 +2869,6 @@ async function runAiNamingSuggestions() {
     aiNamingState.paused = false
     releaseAiNamingPauseResolvers()
     recalculateAiNamingSummary()
-    await saveAiNamingCaches()
     renderAvailabilitySection()
   }
 }
@@ -2864,8 +2884,8 @@ async function retryAiNamingBookmarks(retryCandidates, settings = aiNamingManage
     }
 
     try {
-      const modelItem = await generateAiNamingResultForBookmark(candidate.bookmark, settings)
-      commitAiNamingResult(candidate.bookmark, modelItem, settings)
+      const { modelItem, preparedItem } = await generateAiNamingResultForBookmark(candidate.bookmark, settings)
+      commitAiNamingResult(candidate.bookmark, modelItem, settings, preparedItem)
     } catch (retryError) {
       upsertAiNamingResult(
         buildAiNamingRetriedFailureResult(candidate.bookmark, candidate.initialError, retryError)
@@ -2888,12 +2908,11 @@ async function generateAiNamingResultForBookmark(bookmark, settings = aiNamingMa
     throw new Error('AI 返回中缺少该书签的命名结果。')
   }
 
-  cacheAiNamingModelItem(preparedItem, modelItem, settings)
-  return modelItem
+  return { modelItem, preparedItem }
 }
 
-function commitAiNamingResult(bookmark, modelItem, settings = aiNamingManagerState.settings) {
-  const nextResult = buildAiNamingResultFromModelItem(bookmark, modelItem)
+function commitAiNamingResult(bookmark, modelItem, settings = aiNamingManagerState.settings, preparedItem = null) {
+  const nextResult = buildAiNamingResultFromModelItem(bookmark, modelItem, preparedItem)
   upsertAiNamingResult(nextResult)
 
   if (
@@ -2905,7 +2924,7 @@ function commitAiNamingResult(bookmark, modelItem, settings = aiNamingManagerSta
   }
 }
 
-function buildAiNamingResultFromModelItem(bookmark, modelItem) {
+function buildAiNamingResultFromModelItem(bookmark, modelItem, preparedItem = null) {
   const normalizedTitle = cleanAiSuggestedTitle(modelItem.suggestedTitle || bookmark.title)
   const sameAsCurrent = normalizeText(normalizedTitle) === normalizeText(bookmark.title)
   const status = modelItem.action === 'keep'
@@ -2922,6 +2941,17 @@ function buildAiNamingResultFromModelItem(bookmark, modelItem) {
     suggestedTitle: status === 'suggested' ? normalizedTitle : bookmark.title,
     status,
     confidence: status === 'failed' ? 'low' : modelItem.confidence,
+    confidenceScore: normalizeAiConfidenceScore(modelItem.confidenceScore ?? modelItem.confidence),
+    summary: normalizeAiResultText(modelItem.summary, 420),
+    contentType: normalizeAiResultText(modelItem.contentType || preparedItem?.pageContext?.content_type, 80),
+    topics: normalizeAiResultTextList(modelItem.topics, 8, 48),
+    suggestedFolder: normalizeAiResultText(modelItem.suggestedFolder, 180),
+    tags: normalizeAiResultTextList(modelItem.tags, 10, 40),
+    extractionStatus: String(preparedItem?.pageContext?.extraction?.status || ''),
+    extractionSource: String(preparedItem?.pageContext?.extraction?.source || ''),
+    extractionWarnings: Array.isArray(preparedItem?.pageContext?.extraction?.warnings)
+      ? preparedItem.pageContext.extraction.warnings.slice(0, 4)
+      : [],
     reason: modelItem.reason || 'AI 未提供额外说明。',
     url: bookmark.url,
     displayUrl: bookmark.displayUrl,
@@ -2949,10 +2979,41 @@ function getAiNamingFailureMessage(error) {
   return error instanceof Error ? error.message : '生成建议失败。'
 }
 
+function buildAiFolderCandidates(bookmark) {
+  const candidates = []
+  const seen = new Set()
+  const appendFolder = (value) => {
+    const folderPath = String(value || '').replace(/\s+/g, ' ').trim()
+    const key = normalizeText(folderPath)
+    if (!folderPath || !key || seen.has(key)) {
+      return
+    }
+
+    seen.add(key)
+    candidates.push(folderPath)
+  }
+
+  appendFolder(bookmark?.path)
+  availabilityState.allFolders
+    .slice()
+    .sort((left, right) => {
+      const leftSameDomain = String(bookmark?.path || '').startsWith(String(left.path || left.title || '')) ? -1 : 0
+      const rightSameDomain = String(bookmark?.path || '').startsWith(String(right.path || right.title || '')) ? -1 : 0
+      return leftSameDomain - rightSameDomain || compareByPathTitle(left, right)
+    })
+    .forEach((folder) => {
+      appendFolder(folder.path || folder.title)
+    })
+
+  return candidates.slice(0, 80)
+}
+
 async function buildAiNamingPreparedItem(bookmark, timeoutMs) {
   const metadata = await getAiMetadataForBookmark(bookmark, timeoutMs)
+  const pageContext = buildPageContextForAi(metadata)
   return {
     bookmark,
+    pageContext,
     requestItem: {
       bookmark_id: String(bookmark.id),
       current_title: String(bookmark.title || '未命名书签'),
@@ -2960,79 +3021,103 @@ async function buildAiNamingPreparedItem(bookmark, timeoutMs) {
       final_url: String(metadata.finalUrl || bookmark.url || ''),
       folder_path: String(bookmark.path || ''),
       domain: String(bookmark.domain || extractDomain(metadata.finalUrl || bookmark.url || '')),
-      page_meta: {
-        title: metadata.title,
-        og_title: metadata.ogTitle,
-        twitter_title: metadata.twitterTitle,
-        h1: metadata.h1,
-        site_name: metadata.siteName,
-        description: metadata.description,
-        content_type: metadata.contentType,
-        source: metadata.source
-      }
+      existing_folders: buildAiFolderCandidates(bookmark),
+      page_context: pageContext
     }
   }
 }
 
 async function getAiMetadataForBookmark(bookmark, timeoutMs) {
-  const cacheKey = createAiMetadataCacheKey(bookmark)
-  const cachedEntry = aiNamingState.metadataCache?.[cacheKey]
-  if (cachedEntry && Date.now() - Number(cachedEntry.fetchedAt || 0) <= AI_METADATA_CACHE_TTL_MS) {
-    aiNamingState.metadataCacheHits += 1
-    return cachedEntry.metadata
-  }
-
   let metadata
   try {
     metadata = await fetchBookmarkMetadataForAi(bookmark.url, timeoutMs, bookmark)
   } catch (error) {
-    metadata = buildFallbackAiMetadataFromUrl(bookmark.url, {
+    metadata = buildFallbackPageContentFromUrl(bookmark.url, {
       currentTitle: bookmark.title,
       error
     })
   }
 
-  aiNamingState.metadataCache[cacheKey] = {
-    bookmarkId: String(bookmark.id),
-    url: String(bookmark.url || ''),
-    fetchedAt: Date.now(),
-    metadata: normalizeAiMetadata(metadata)
-  }
-  aiNamingState.cacheDirty = true
-  return aiNamingState.metadataCache[cacheKey].metadata
+  return normalizePageContentContext(metadata)
 }
 
 async function fetchBookmarkMetadataForAi(url, timeoutMs, bookmark = null) {
-  const response = await fetchWithRequestTimeout(url, {
+  let context = null
+
+  try {
+    const response = await fetchWithRequestTimeout(url, {
+      method: 'GET',
+      cache: 'no-store',
+      credentials: 'omit',
+      redirect: 'follow',
+      referrerPolicy: 'no-referrer'
+    }, timeoutMs)
+    const finalUrl = String(response.url || url || '')
+    const contentType = String(response.headers.get('content-type') || '').toLowerCase()
+
+    if (!contentType.includes('text/html')) {
+      context = buildFallbackPageContentFromUrl(finalUrl, {
+        currentTitle: bookmark?.title,
+        contentType
+      })
+    } else {
+      const html = await response.text()
+      context = extractPageContentFromHtml(html, {
+        url: finalUrl,
+        currentTitle: bookmark?.title,
+        contentType
+      })
+    }
+  } catch (error) {
+    context = buildFallbackPageContentFromUrl(url, {
+      currentTitle: bookmark?.title,
+      error
+    })
+  }
+
+  if (aiNamingManagerState.settings.allowRemoteParsing) {
+    try {
+      const remoteContext = await fetchRemoteBookmarkContentForAi(context.finalUrl || url, timeoutMs, context)
+      return combinePageContentContexts(context, remoteContext)
+    } catch (error) {
+      return normalizePageContentContext({
+        ...context,
+        warnings: [
+          ...(context.warnings || []),
+          `远程解析失败：${getAiNamingFailureMessage(error)}`
+        ]
+      })
+    }
+  }
+
+  return context
+}
+
+async function fetchRemoteBookmarkContentForAi(url, timeoutMs, fallbackContext) {
+  const readerUrl = buildJinaReaderUrl(url)
+  if (!readerUrl) {
+    throw new Error('远程解析 URL 无效。')
+  }
+
+  const response = await fetchWithRequestTimeout(readerUrl, {
     method: 'GET',
     cache: 'no-store',
     credentials: 'omit',
     redirect: 'follow',
-    referrerPolicy: 'no-referrer'
+    referrerPolicy: 'no-referrer',
+    headers: {
+      Accept: 'text/plain, text/markdown;q=0.9, */*;q=0.1'
+    }
   }, timeoutMs)
-  const finalUrl = String(response.url || url || '')
-  const contentType = String(response.headers.get('content-type') || '').toLowerCase()
 
-  if (!contentType.includes('text/html')) {
-    return buildFallbackAiMetadataFromUrl(finalUrl, {
-      currentTitle: bookmark?.title,
-      contentType
-    })
+  if (!response.ok) {
+    throw new Error(`Jina Reader 返回 HTTP ${response.status}。`)
   }
 
-  const html = await response.text()
-  return {
-    finalUrl,
-    contentType,
-    source: 'html',
-    ...extractAiMetadataFromHtml(html)
-  }
-}
-
-function createAiMetadataCacheKey(bookmark) {
-  return stableHash({
-    bookmarkId: String(bookmark?.id || ''),
-    url: String(bookmark?.url || '')
+  const text = await response.text()
+  return buildRemotePageContentFromText(text, {
+    url: fallbackContext?.finalUrl || url,
+    currentTitle: fallbackContext?.title
   })
 }
 
@@ -3055,7 +3140,7 @@ async function requestAiNamingConnectivityTest(settings = aiNamingManagerState.s
     throw new Error(extractAiErrorMessage(payload, response.status))
   }
 
-  return `连通性测试通过，模型 ${settings.model} 可正常访问。`
+  return `连接成功，当前模型 ${settings.model} 可用。`
 }
 
 function buildAiNamingConnectivityRequestBody(settings = aiNamingManagerState.settings) {
@@ -3075,131 +3160,6 @@ function buildAiNamingConnectivityRequestBody(settings = aiNamingManagerState.se
     model: settings.model,
     input: 'Reply with OK.'
   }
-}
-
-function extractAiMetadataFromHtml(html) {
-  const parser = new DOMParser()
-  const documentNode = parser.parseFromString(String(html || ''), 'text/html')
-  const queryMeta = (selector) => {
-    const node = documentNode.querySelector(selector)
-    return normalizeAiMetadataText(node?.getAttribute('content') || '')
-  }
-  const title = normalizeAiMetadataText(documentNode.querySelector('title')?.textContent || '')
-  const h1 = normalizeAiMetadataText(documentNode.querySelector('h1')?.textContent || '')
-
-  return {
-    title,
-    ogTitle: queryMeta('meta[property="og:title"]'),
-    twitterTitle: queryMeta('meta[name="twitter:title"]'),
-    h1,
-    siteName: queryMeta('meta[property="og:site_name"]'),
-    description:
-      queryMeta('meta[name="description"]') ||
-      queryMeta('meta[property="og:description"]')
-  }
-}
-
-function normalizeAiMetadataText(value) {
-  return truncateText(
-    String(value || '')
-      .replace(/\s+/g, ' ')
-      .trim(),
-    280
-  )
-}
-
-function buildFallbackAiMetadataFromUrl(url, { currentTitle = '', contentType = '', error = null } = {}) {
-  const finalUrl = String(url || '')
-  const parsed = parseUrlSafely(finalUrl)
-  const hostname = parsed?.hostname.replace(/^www\./i, '') || ''
-  const pathname = parsed?.pathname || ''
-  const filename = decodeURIComponent(pathname.split('/').filter(Boolean).at(-1) || '')
-  const readableFilename = normalizeAiMetadataText(
-    filename
-      .replace(/\.[a-z0-9]{1,8}$/i, '')
-      .replace(/[-_]+/g, ' ')
-  )
-  const lowerUrl = finalUrl.toLowerCase()
-  const lowerContentType = String(contentType || '').toLowerCase()
-  let title = normalizeAiMetadataText(currentTitle)
-  let siteName = hostname
-  let description = ''
-  let source = lowerContentType ? 'non-html' : 'fallback'
-
-  if (lowerContentType.includes('pdf') || /\.pdf($|[?#])/i.test(finalUrl)) {
-    title = readableFilename || title || 'PDF 文档'
-    description = '该书签指向 PDF 文档，已基于文件名和 URL 生成命名线索。'
-    source = 'pdf'
-  } else if (hostname === 'github.com') {
-    const segments = pathname.split('/').filter(Boolean)
-    if (segments.length >= 2) {
-      title = `${segments[0]} / ${segments[1]}`
-      description = segments.length > 2
-        ? `GitHub ${segments.slice(2).join(' / ')}`
-        : 'GitHub repository'
-    }
-    siteName = 'GitHub'
-    source = 'github'
-  } else if (hostname === 'www.npmjs.com' || hostname === 'npmjs.com') {
-    const packageName = pathname.replace(/^\/package\//, '').split('/').filter(Boolean).join('/')
-    title = packageName || title || 'npm package'
-    siteName = 'npm'
-    description = 'npm package page'
-    source = 'npm'
-  } else if (hostname.includes('chromewebstore.google.com')) {
-    title = title || readableFilename || 'Chrome Web Store 扩展'
-    siteName = 'Chrome Web Store'
-    description = 'Chrome Web Store listing'
-    source = 'chrome-web-store'
-  } else if (hostname === 'youtu.be' || hostname.endsWith('youtube.com')) {
-    title = title || 'YouTube 视频'
-    siteName = 'YouTube'
-    description = 'YouTube video or channel page'
-    source = 'youtube'
-  } else if (isDocumentationHost(hostname)) {
-    title = readableFilename || title || hostname
-    siteName = hostname
-    description = 'Documentation page inferred from URL path'
-    source = 'docs'
-  } else {
-    title = readableFilename || title || hostname || finalUrl
-    description = error
-      ? `网页元信息抓取失败：${getAiNamingFailureMessage(error)}`
-      : lowerContentType
-        ? `非 HTML 页面：${lowerContentType}`
-        : '已基于 URL 生成命名线索。'
-  }
-
-  return normalizeAiMetadata({
-    finalUrl,
-    title,
-    ogTitle: '',
-    twitterTitle: '',
-    h1: '',
-    siteName,
-    description,
-    contentType: lowerContentType,
-    source
-  })
-}
-
-function parseUrlSafely(url) {
-  try {
-    return new URL(String(url || ''))
-  } catch {
-    return null
-  }
-}
-
-function isDocumentationHost(hostname) {
-  return (
-    hostname.includes('docs.') ||
-    hostname.includes('developer.') ||
-    hostname.endsWith('.readthedocs.io') ||
-    hostname === 'developer.mozilla.org' ||
-    hostname === 'docs.github.com' ||
-    hostname === 'learn.microsoft.com'
-  )
 }
 
 function normalizeAiNamingConnectivityError(error, timeoutMs = aiNamingManagerState.settings.timeoutMs) {
@@ -3304,12 +3264,18 @@ function buildAiNamingRequestBody(preparedItems, settings) {
 function getDefaultAiNamingSystemPrompt() {
   return [
     '你是一个面向中文用户的浏览器书签整理助手。',
-    '你的任务是根据 current_title、url、final_url、folder_path、domain 和 page_meta，为每条书签生成更适合长期保存、回看和检索的标题。',
+    '你的任务是根据 current_title、url、final_url、folder_path、domain、existing_folders 和 page_context，为每条书签生成更适合长期保存、回看和检索的结构化建议。',
+    'page_context 是扩展从网页中抽取和压缩后的内容，包含 title、description、Open Graph、canonical URL、语言、headings、正文摘录、链接上下文、内容类型与抽取状态。',
+    '如果 page_context.source_contexts 同时包含“本地抽取”和“Jina Reader”，请结合两路内容判断：本地抽取通常保留浏览器可见的 title/meta/链接上下文，Jina Reader 通常提供更干净的 Markdown 正文。两者冲突时，优先相信更具体、更能被正文支持的信息。',
     '标题风格要像中文用户手动整理过的书签：清晰、克制、稳定、便于再次查找，而不是网页 SEO 标题或营销文案。',
     '优先提炼页面真正的主题词、对象名、文档名、文章名、产品名或工具名；必要时可保留版本号、年份、平台名、作者名、语言、文档类型等关键信息。',
     '删除无信息价值的噪音，例如站点名堆叠、首页、欢迎语、广告语、登录提示、促销词、重复后缀、无意义分隔符。',
     '默认优先输出自然中文标题；但如果页面主体明显是英文或其他语言，则翻译原语言核心标题，在源语言核心标题后方用冒号添加译文。格式示例：`核心标题: 中文译文`。',
     '不要凭空补充页面中没有出现的实体、结论、时间或用途。',
+    'summary 要概括页面主要内容；content_type 从文档、博客、论文、工具、新闻、GitHub 项目、视频、商品页、论坛、登录页、网页中选择最贴近的一类。',
+    'suggested_folder 优先从 existing_folders 中选择；如果都明显不合适，可以给出一个简短的新文件夹建议。',
+    'topics 和 tags 要短，适合用户筛选和回忆，不要超过输入内容能支持的范围。',
+    'confidence 必须是 0 到 1 的数字。内容不足、抽取状态为 limited/fallback/failed、或判断依赖 URL 猜测时要降低 confidence。',
     `建议标题应尽量精炼，通常不超过 ${AI_NAMING_MAX_TEXT_LENGTH} 个字符。`,
     '如果当前标题已经足够清晰、稳定且适合检索，请返回 keep。',
     '如果页面信息过少、噪音过多、含义不明确，或无法可靠判断该怎样命名，请返回 manual_review。',
@@ -3322,8 +3288,8 @@ function getDefaultAiNamingSystemPrompt() {
 function buildAiNamingUserPrompt(preparedItems) {
   const payload = preparedItems.map((item) => item.requestItem)
   return [
-    '请逐条判断这些书签是否需要改名，并返回结构化结果。',
-    '优先语言：与页面标题的主要语言保持一致；若信息不足，则保留当前标题或标记为 manual_review。',
+    '请逐条理解这些书签页面，判断用途、主题、内容类型、推荐标题和推荐文件夹，并返回结构化结果。',
+    '优先语言：与页面标题的主要语言保持一致；若信息不足，则保留当前标题或标记为 manual_review，并降低 confidence。',
     '输入数据如下：',
     JSON.stringify({ items: payload }, null, 2)
   ].join('\n\n')
@@ -3350,8 +3316,14 @@ function normalizeAiNamingResponseItems(payload, preparedItems) {
           action === 'rename' || action === 'keep' || action === 'manual_review'
             ? action
             : 'manual_review',
+        summary: normalizeAiResultText(item?.summary, 420),
+        contentType: normalizeAiResultText(item?.content_type, 80),
+        topics: normalizeAiResultTextList(item?.topics, 8, 48),
         suggestedTitle: cleanAiSuggestedTitle(item?.suggested_title),
+        suggestedFolder: normalizeAiResultText(item?.suggested_folder, 180),
+        tags: normalizeAiResultTextList(item?.tags, 10, 40),
         confidence: normalizeAiConfidence(item?.confidence),
+        confidenceScore: normalizeAiConfidenceScore(item?.confidence),
         reason: String(item?.reason || '').replace(/\s+/g, ' ').trim()
       }
     })
@@ -3370,55 +3342,11 @@ function mergeAiNamingBatchResults(preparedItems, aiResponseItems, settings = ai
       continue
     }
 
-    commitAiNamingResult(bookmark, modelItem)
-    cacheAiNamingModelItem(preparedItem, modelItem, settings)
+    commitAiNamingResult(bookmark, modelItem, settings, preparedItem)
   }
 
   sortAiNamingResults()
   return failedPreparedItems
-}
-
-function getCachedAiNamingModelItem(preparedItem, settings = aiNamingManagerState.settings) {
-  const cacheKey = createAiResultCacheKey(preparedItem, settings)
-  const entry = aiNamingState.resultCache?.[cacheKey]
-  if (!entry || Date.now() - Number(entry.createdAt || 0) > AI_RESULT_CACHE_TTL_MS) {
-    return null
-  }
-
-  return entry.item || null
-}
-
-function cacheAiNamingModelItem(preparedItem, modelItem, settings = aiNamingManagerState.settings) {
-  const cacheKey = createAiResultCacheKey(preparedItem, settings)
-  if (!cacheKey) {
-    return
-  }
-
-  aiNamingState.resultCache[cacheKey] = {
-    createdAt: Date.now(),
-    item: {
-      bookmarkId: String(modelItem.bookmarkId || preparedItem.bookmark.id),
-      action: modelItem.action,
-      suggestedTitle: cleanAiSuggestedTitle(modelItem.suggestedTitle),
-      confidence: normalizeAiConfidence(modelItem.confidence),
-      reason: String(modelItem.reason || '').replace(/\s+/g, ' ').trim()
-    }
-  }
-  aiNamingState.cacheDirty = true
-}
-
-function createAiResultCacheKey(preparedItem, settings = aiNamingManagerState.settings) {
-  return stableHash({
-    model: settings.model,
-    apiStyle: settings.apiStyle,
-    systemPrompt: settings.systemPrompt || getDefaultAiNamingSystemPrompt(),
-    requestItem: normalizeAiRequestItemForCache(preparedItem.requestItem)
-  })
-}
-
-function normalizeAiRequestItemForCache(requestItem) {
-  const { bookmark_id: _bookmarkId, ...cacheableRequestItem } = requestItem || {}
-  return cacheableRequestItem
 }
 
 function upsertAiNamingResult(result) {
@@ -3474,6 +3402,15 @@ function buildAiNamingFailedResult(bookmark, error) {
     suggestedTitle: bookmark.title,
     status: 'failed',
     confidence: 'low',
+    confidenceScore: 0,
+    summary: '',
+    contentType: '',
+    topics: [],
+    suggestedFolder: '',
+    tags: [],
+    extractionStatus: '',
+    extractionSource: '',
+    extractionWarnings: [],
     reason: error instanceof Error ? error.message : '生成建议失败。',
     url: bookmark.url,
     displayUrl: bookmark.displayUrl,
@@ -3547,11 +3484,81 @@ function buildAiStructuredOutputRefusalError(refusal) {
 }
 
 function normalizeAiConfidence(confidence) {
+  if (typeof confidence === 'number') {
+    if (confidence >= 0.78) {
+      return 'high'
+    }
+    if (confidence >= 0.52) {
+      return 'medium'
+    }
+    return 'low'
+  }
+
   const normalized = String(confidence || '').trim()
   if (normalized === 'high' || normalized === 'medium' || normalized === 'low') {
     return normalized
   }
+  const numeric = Number(normalized)
+  if (Number.isFinite(numeric)) {
+    return normalizeAiConfidence(numeric)
+  }
   return 'low'
+}
+
+function normalizeAiConfidenceScore(confidence) {
+  if (typeof confidence === 'number' && Number.isFinite(confidence)) {
+    return Math.max(0, Math.min(confidence, 1))
+  }
+
+  const normalized = String(confidence || '').trim()
+  const numeric = Number(normalized)
+  if (Number.isFinite(numeric)) {
+    return Math.max(0, Math.min(numeric, 1))
+  }
+
+  if (normalized === 'high') {
+    return 0.86
+  }
+  if (normalized === 'medium') {
+    return 0.64
+  }
+  if (normalized === 'low') {
+    return 0.34
+  }
+
+  return 0
+}
+
+function normalizeAiResultText(value, limit = 180) {
+  return truncateText(
+    String(value || '')
+      .replace(/\s+/g, ' ')
+      .trim(),
+    limit
+  )
+}
+
+function normalizeAiResultTextList(values, limit = 8, itemLimit = 48) {
+  const source = Array.isArray(values)
+    ? values
+    : typeof values === 'string'
+      ? values.split(/[,，;；\n]+/g)
+      : []
+  const seen = new Set()
+
+  return source
+    .map((value) => normalizeAiResultText(value, itemLimit))
+    .filter(Boolean)
+    .filter((value) => {
+      const key = normalizeText(value)
+      if (!key || seen.has(key)) {
+        return false
+      }
+
+      seen.add(key)
+      return true
+    })
+    .slice(0, limit)
 }
 
 function cleanAiSuggestedTitle(title) {
@@ -3561,32 +3568,6 @@ function cleanAiSuggestedTitle(title) {
       .trim(),
     AI_NAMING_MAX_TEXT_LENGTH
   )
-}
-
-function stableHash(value) {
-  const text = stableStringify(value)
-  let hash = 2166136261
-  for (let index = 0; index < text.length; index += 1) {
-    hash ^= text.charCodeAt(index)
-    hash = Math.imul(hash, 16777619)
-  }
-
-  return `h${(hash >>> 0).toString(16)}`
-}
-
-function stableStringify(value) {
-  if (value === null || typeof value !== 'object') {
-    return JSON.stringify(value)
-  }
-
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringify(item)).join(',')}]`
-  }
-
-  return `{${Object.keys(value)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
-    .join(',')}}`
 }
 
 function getAiNamingEndpoint(settings) {

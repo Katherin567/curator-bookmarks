@@ -13,6 +13,7 @@ import {
 } from '../shared/bookmark-tree.js'
 import {
   displayUrl,
+  extractDomain,
   normalizeText,
   normalizeUrl,
   stripCommonUrlPrefix
@@ -29,12 +30,62 @@ import {
   appendRecycleEntry,
   removeRecycleEntry
 } from '../shared/recycle-bin.js'
-import { getLocalStorage, setLocalStorage } from '../shared/storage.js'
+import { getLocalStorage, removeLocalStorage } from '../shared/storage.js'
+import { requestBookmarkSave } from '../shared/messages.js'
+import { normalizeAiNamingSettings } from '../options/sections/ai-settings.js'
+import {
+  buildFallbackPageContentFromUrl,
+  buildJinaReaderUrl,
+  buildPageContextForAi,
+  buildRemotePageContentFromText,
+  combinePageContentContexts,
+  extractPageContentFromHtml,
+  normalizePageContentContext
+} from '../options/sections/content-extraction.js'
+import {
+  AI_NAMING_DEFAULT_TIMEOUT_MS,
+  AI_NAMING_JINA_READER_ORIGIN
+} from '../options/shared-options/constants.js'
 
 const SEARCH_DEBOUNCE_MS = 140
 const MAX_RESULTS = 20
 const SEARCH_CACHE_LIMIT = 40
 const SEARCH_PREFILTER_THRESHOLD = 1200
+const SMART_RECOMMENDATION_LIMIT = 3
+const SMART_LOADING_STEP_COUNT = 3
+
+const SMART_CLASSIFY_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['title', 'summary', 'existing_folders', 'new_folder'],
+  properties: {
+    title: { type: 'string' },
+    summary: { type: 'string' },
+    existing_folders: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['folder_path', 'reason', 'confidence'],
+        properties: {
+          folder_path: { type: 'string' },
+          reason: { type: 'string' },
+          confidence: { type: 'number', minimum: 0, maximum: 1 }
+        }
+      }
+    },
+    new_folder: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['folder_path', 'reason', 'confidence'],
+      properties: {
+        folder_path: { type: 'string' },
+        reason: { type: 'string' },
+        confidence: { type: 'number', minimum: 0, maximum: 1 }
+      }
+    }
+  }
+}
 
 const state = {
   isLoading: true,
@@ -63,6 +114,21 @@ const state = {
   moveSearchQuery: '',
   editTargetBookmarkId: null,
   confirmDeleteBookmarkId: null,
+  currentTab: null,
+  currentPageBookmarkId: null,
+  smartStatus: 'idle',
+  smartError: '',
+  smartStep: 0,
+  smartProgressPercent: 0,
+  smartSuggestedTitle: '',
+  smartSummary: '',
+  smartRecommendations: [],
+  smartSelectedRecommendationId: '',
+  smartFolderPickerOpen: false,
+  smartFolderSearchQuery: '',
+  smartSaving: false,
+  smartSaved: false,
+  smartRunId: 0,
   lastDeletedBookmark: null,
   toasts: [],
   toastTimers: new Map()
@@ -74,8 +140,11 @@ document.addEventListener('DOMContentLoaded', () => {
   cacheDom()
   bindEvents()
   render()
+  void showPendingAutoAnalyzeNotice()
   refreshData({ initial: true, preserveSearch: false }).finally(() => {
-    dom.searchInput.focus()
+    if (!document.body.classList.contains('smart-active')) {
+      dom.searchInput.focus()
+    }
   })
 })
 
@@ -88,6 +157,10 @@ function cacheDom() {
   dom.folderFilterTrigger = document.getElementById('folder-filter-trigger')
   dom.clearFolderFilter = document.getElementById('clear-folder-filter')
   dom.errorBanner = document.getElementById('error-banner')
+  dom.smartClassifier = document.getElementById('smart-classifier')
+  dom.smartFooter = document.getElementById('smart-footer')
+  dom.smartTotal = document.getElementById('smart-total')
+  dom.smartFooterSettings = document.getElementById('smart-footer-settings')
   dom.loadingState = document.getElementById('loading-state')
   dom.emptyState = document.getElementById('empty-state')
   dom.content = document.getElementById('content')
@@ -102,6 +175,12 @@ function cacheDom() {
   dom.moveSearchInput = document.getElementById('move-search-input')
   dom.moveFolderList = document.getElementById('move-folder-list')
   dom.closeMoveModal = document.getElementById('close-move-modal')
+  dom.smartFolderModal = document.getElementById('smart-folder-modal')
+  dom.smartFolderPageTitle = document.getElementById('smart-folder-page-title')
+  dom.smartFolderPageUrl = document.getElementById('smart-folder-page-url')
+  dom.smartFolderSearchInput = document.getElementById('smart-folder-search-input')
+  dom.smartFolderList = document.getElementById('smart-folder-list')
+  dom.closeSmartFolderModal = document.getElementById('close-smart-folder-modal')
   dom.editModal = document.getElementById('edit-modal')
   dom.editBookmarkPath = document.getElementById('edit-bookmark-path')
   dom.editTitleInput = document.getElementById('edit-title-input')
@@ -119,6 +198,9 @@ function cacheDom() {
 
 function bindEvents() {
   dom.openSettings.addEventListener('click', openSettingsPage)
+  dom.smartFooterSettings.addEventListener('click', openSettingsPage)
+  dom.smartClassifier.addEventListener('click', handleSmartClassifierClick)
+  dom.smartClassifier.addEventListener('input', handleSmartClassifierInput)
   dom.searchInput.addEventListener('input', (event) => {
     setSearchQuery(event.target.value)
   })
@@ -144,6 +226,12 @@ function bindEvents() {
     renderMoveModal()
   })
   dom.closeMoveModal.addEventListener('click', closeDialogs)
+  dom.smartFolderList.addEventListener('click', handleSmartFolderListClick)
+  dom.smartFolderSearchInput.addEventListener('input', (event) => {
+    state.smartFolderSearchQuery = event.target.value
+    renderSmartFolderModal()
+  })
+  dom.closeSmartFolderModal.addEventListener('click', closeDialogs)
   dom.closeEditModal.addEventListener('click', closeDialogs)
   dom.cancelEdit.addEventListener('click', closeDialogs)
   dom.saveEdit.addEventListener('click', saveEditedBookmark)
@@ -165,7 +253,9 @@ function bindEvents() {
 
 async function openSettingsPage() {
   try {
-    await chrome.runtime.openOptionsPage()
+    await chrome.tabs.create({
+      url: chrome.runtime.getURL('src/options/options.html#general')
+    })
     window.close()
   } catch (error) {
     showToast({
@@ -173,6 +263,65 @@ async function openSettingsPage() {
       message: error instanceof Error ? error.message : '设置页打开失败，请稍后重试。'
     })
   }
+}
+
+async function openBookmarkHistoryPage() {
+  try {
+    await chrome.tabs.create({
+      url: chrome.runtime.getURL('src/options/options.html#bookmark-history')
+    })
+    window.close()
+  } catch (error) {
+    showToast({
+      type: 'error',
+      message: error instanceof Error ? error.message : '添加历史打开失败，请稍后重试。'
+    })
+  }
+}
+
+async function showPendingAutoAnalyzeNotice() {
+  try {
+    const stored = await getLocalStorage([STORAGE_KEYS.pendingAutoAnalyzeNotice])
+    const notice = stored[STORAGE_KEYS.pendingAutoAnalyzeNotice]
+    if (!notice || typeof notice !== 'object') {
+      await clearActionBadge()
+      return
+    }
+
+    const folderPath = cleanSmartText(notice.folderPath || '', 48)
+    const bookmarkTitle = cleanSmartText(notice.bookmarkTitle || '新增书签', 52)
+    if (!folderPath) {
+      await clearPendingAutoAnalyzeNotice()
+      return
+    }
+
+    showToast({
+      type: 'success',
+      message: `已添加到 ${folderPath}：${bookmarkTitle}`,
+      action: 'open-bookmark-history',
+      actionLabel: '查看'
+    })
+    await clearPendingAutoAnalyzeNotice()
+  } catch (error) {
+  }
+}
+
+async function clearPendingAutoAnalyzeNotice() {
+  await removeLocalStorage(STORAGE_KEYS.pendingAutoAnalyzeNotice)
+  await clearActionBadge()
+}
+
+function clearActionBadge() {
+  return new Promise((resolve) => {
+    if (!chrome.action?.setBadgeText) {
+      resolve()
+      return
+    }
+
+    chrome.action.setBadgeText({ text: '' }, () => {
+      resolve()
+    })
+  })
 }
 
 async function refreshData({ initial = false, preserveSearch = true } = {}) {
@@ -196,6 +345,7 @@ async function refreshData({ initial = false, preserveSearch = true } = {}) {
     state.bookmarkMap = new Map(indexedBookmarks.map((bookmark) => [bookmark.id, bookmark]))
     state.folderMap = extracted.folderMap
     clearSearchCaches()
+    await hydrateCurrentTabState()
 
     const folderIds = new Set(extracted.folders.map((folder) => folder.id))
     const defaultExpanded = getDefaultExpandedFolders(state.bookmarksBarNode)
@@ -244,6 +394,42 @@ async function refreshData({ initial = false, preserveSearch = true } = {}) {
     state.isLoading = false
     render()
   }
+}
+
+async function hydrateCurrentTabState() {
+  state.currentTab = await getActiveTab().catch(() => null)
+  const currentUrl = String(state.currentTab?.url || '').trim()
+  const normalizedCurrentUrl = normalizeUrl(currentUrl)
+  const matchedBookmark = normalizedCurrentUrl
+    ? state.allBookmarks.find((bookmark) => bookmark.normalizedUrl === normalizedCurrentUrl)
+    : null
+
+  state.currentPageBookmarkId = matchedBookmark?.id || null
+
+  if (!isSmartClassifiableUrl(currentUrl)) {
+    state.smartStatus = 'unavailable'
+    state.smartRecommendations = []
+    state.smartSelectedRecommendationId = ''
+    return
+  }
+
+  if (!['loading', 'results', 'saving'].includes(state.smartStatus)) {
+    state.smartStatus = 'idle'
+  }
+}
+
+function getActiveTab() {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const error = chrome.runtime.lastError
+      if (error) {
+        reject(new Error(error.message))
+        return
+      }
+
+      resolve(tabs?.[0] || null)
+    })
+  })
 }
 
 function setSearchQuery(value, { immediate = false } = {}) {
@@ -306,9 +492,11 @@ function render() {
   renderBanner()
   renderToolbar()
   renderFilterBar()
+  renderSmartClassifier()
   renderMainContent()
   renderFilterModal()
   renderMoveModal()
+  renderSmartFolderModal()
   renderEditModal()
   renderDeleteModal()
   renderToasts()
@@ -344,6 +532,221 @@ function renderFilterBar() {
     : '全部文件夹'
   dom.folderFilterTrigger.title = selectedFolder?.path || ''
   dom.clearFolderFilter.classList.toggle('hidden', !selectedFolder)
+}
+
+function renderSmartClassifier() {
+  const currentUrl = String(state.currentTab?.url || '').trim()
+  const smartAvailable = isSmartClassifiableUrl(currentUrl)
+  const smartOverlayActive =
+    smartAvailable && ['loading', 'results', 'error'].includes(state.smartStatus)
+
+  document.body.classList.toggle('smart-active', smartOverlayActive)
+  dom.smartClassifier.classList.toggle('hidden', !smartAvailable)
+  dom.smartFooter.classList.toggle('hidden', !smartOverlayActive)
+  dom.smartTotal.textContent = `总计 ${state.allBookmarks.length}`
+
+  if (!smartAvailable) {
+    return
+  }
+
+  if (state.isLoading && state.smartStatus !== 'results') {
+    dom.smartClassifier.innerHTML = '<div class="state-panel">正在读取当前网页…</div>'
+    return
+  }
+
+  if (state.smartStatus === 'loading') {
+    const currentProgress = readSmartProgressPercent()
+    dom.smartClassifier.innerHTML = renderSmartLoadingCard(currentProgress)
+    animateSmartProgress()
+    return
+  }
+
+  if (state.smartStatus === 'results') {
+    dom.smartClassifier.innerHTML = renderSmartResultCard()
+    return
+  }
+
+  if (state.smartStatus === 'error') {
+    dom.smartClassifier.innerHTML = `
+      ${renderSmartPageCard()}
+      <div class="smart-panel-head smart-panel-head-standalone">
+        <p>智能分类失败</p>
+        ${renderSmartExitButton()}
+      </div>
+      <div class="error-banner">${escapeHtml(state.smartError || '智能分类失败，请稍后重试。')}</div>
+      ${renderSmartManualButton()}
+    `
+    return
+  }
+
+  dom.smartClassifier.innerHTML = renderSmartPageCard()
+}
+
+function renderSmartPageCard() {
+  const title = getCurrentPageTitle()
+  const favicon = String(state.currentTab?.favIconUrl || '')
+
+  return `
+    <article class="smart-page-card">
+      <div class="smart-page-main">
+        <span class="smart-page-icon" aria-hidden="true">
+          ${favicon ? `<img src="${escapeAttr(favicon)}" alt="">` : escapeHtml(getSmartFallbackIconLabel(title))}
+        </span>
+        <div class="smart-page-copy">
+          <p class="smart-page-title" title="${escapeAttr(title)}">${escapeHtml(title)}</p>
+        </div>
+      </div>
+      <button class="smart-classify-button" type="button" data-smart-action="classify">
+        智能分类
+      </button>
+    </article>
+  `
+}
+
+function renderSmartExitButton() {
+  return `
+    <button class="smart-exit-button" type="button" data-smart-action="exit" aria-label="退出智能分类">
+      退出
+    </button>
+  `
+}
+
+function renderSmartManualButton() {
+  return `
+    <button class="smart-manual-button" type="button" data-smart-action="manual-folder">
+      <span class="smart-folder-icon" aria-hidden="true"></span>
+      <span>手动选择文件夹</span>
+    </button>
+  `
+}
+
+function renderSmartLoadingCard(currentProgress = state.smartProgressPercent) {
+  const step = Math.max(1, Math.min(state.smartStep || 1, SMART_LOADING_STEP_COUNT))
+  const progress = getSmartProgressTarget()
+  const startProgress = Math.max(0, Math.min(Number(currentProgress) || 0, progress))
+
+  return `
+    <article class="smart-loading-card">
+      <div class="smart-panel-head">
+        <p>智能分类</p>
+        ${renderSmartExitButton()}
+      </div>
+      <p class="smart-loading-copy">
+        <span>${escapeHtml(getSmartLoadingLabel())}</span>
+        <small>${step}/${SMART_LOADING_STEP_COUNT}</small>
+      </p>
+      <div class="smart-progress-track" aria-hidden="true">
+        <span
+          class="smart-progress-bar"
+          data-smart-progress-target="${escapeAttr(String(progress))}"
+          style="width: ${startProgress}%"
+        ></span>
+      </div>
+    </article>
+  `
+}
+
+function animateSmartProgress() {
+  const progressBar = dom.smartClassifier.querySelector('.smart-progress-bar')
+  if (!progressBar) {
+    return
+  }
+
+  const targetProgress = Math.max(
+    0,
+    Math.min(Number(progressBar.getAttribute('data-smart-progress-target')) || 0, 100)
+  )
+
+  window.requestAnimationFrame(() => {
+    progressBar.style.width = `${targetProgress}%`
+    state.smartProgressPercent = targetProgress
+  })
+}
+
+function readSmartProgressPercent() {
+  const track = dom.smartClassifier.querySelector('.smart-progress-track')
+  const progressBar = dom.smartClassifier.querySelector('.smart-progress-bar')
+  if (!track || !progressBar) {
+    return state.smartProgressPercent
+  }
+
+  const trackWidth = track.getBoundingClientRect().width
+  if (!trackWidth) {
+    return state.smartProgressPercent
+  }
+
+  return Math.max(0, Math.min((progressBar.getBoundingClientRect().width / trackWidth) * 100, 100))
+}
+
+function renderSmartResultCard() {
+  const selectedId = state.smartSelectedRecommendationId
+  const recommendations = state.smartRecommendations || []
+  const canSave = Boolean(recommendations.length && !state.smartSaving && !state.smartSaved)
+
+  return `
+    <article class="smart-result-card">
+      <div class="smart-panel-head">
+        <p>推荐文件夹</p>
+        ${renderSmartExitButton()}
+      </div>
+      <div class="smart-title-row">
+        <input
+          id="smart-title-input"
+          class="smart-title-input"
+          type="text"
+          spellcheck="false"
+          maxlength="180"
+          value="${escapeAttr(state.smartSuggestedTitle || getCurrentPageTitle())}"
+          aria-label="推荐书签标题"
+        >
+        <span class="smart-edit-indicator" aria-hidden="true"></span>
+      </div>
+
+      <p class="smart-section-label">推荐文件夹</p>
+      <div class="smart-recommendations">
+        ${
+          recommendations.length
+            ? recommendations.map((recommendation) => renderSmartRecommendation(recommendation, selectedId)).join('')
+            : '<div class="state-panel compact">未生成可用推荐，请手动选择文件夹。</div>'
+        }
+      </div>
+
+      <div class="smart-actions">
+        <button class="smart-cancel-button" type="button" data-smart-action="reset">取消</button>
+        <button class="smart-save-button ${state.smartSaved ? 'saved' : ''}" type="button" data-smart-action="save" ${canSave ? '' : 'disabled'}>
+          ${state.smartSaved ? '已保存' : state.smartSaving ? '保存中…' : '确认保存'}
+        </button>
+      </div>
+    </article>
+    ${renderSmartManualButton()}
+  `
+}
+
+function renderSmartRecommendation(recommendation, selectedId) {
+  const isSelected = recommendation.id === selectedId
+  const confidence = Math.round(Math.max(0, Math.min(Number(recommendation.confidence) || 0, 1)) * 100)
+  const path = recommendation.path || recommendation.title || ''
+
+  return `
+    <button
+      class="smart-folder-option ${isSelected ? 'selected' : ''}"
+      type="button"
+      data-smart-recommendation="${escapeAttr(recommendation.id)}"
+    >
+      <span class="smart-folder-main">
+        <span class="smart-folder-head">
+          <span class="smart-folder-icon" aria-hidden="true"></span>
+          <span class="smart-folder-name">${escapeHtml(recommendation.title || path || '未命名文件夹')}</span>
+        </span>
+        <span class="smart-folder-path">${escapeHtml(formatSmartFolderPath(path))}</span>
+      </span>
+      <span class="smart-folder-meta">
+        ${recommendation.kind === 'new' ? '<span class="smart-new-badge">新建</span>' : ''}
+        ${isSelected ? '<span class="smart-checkmark">✓</span>' : ''}
+        <span>${escapeHtml(String(confidence))}%</span>
+      </span>
+    </button>
+  `
 }
 
 function renderMainContent() {
@@ -546,6 +949,21 @@ function renderMoveModal() {
   syncBackdropVisibility()
 }
 
+function renderSmartFolderModal() {
+  dom.smartFolderModal.classList.toggle('hidden', !state.smartFolderPickerOpen)
+
+  if (!state.smartFolderPickerOpen) {
+    syncBackdropVisibility()
+    return
+  }
+
+  dom.smartFolderPageTitle.textContent = state.smartSuggestedTitle || getCurrentPageTitle()
+  dom.smartFolderPageUrl.textContent = displayUrl(state.currentTab?.url || '')
+  dom.smartFolderSearchInput.value = state.smartFolderSearchQuery
+  dom.smartFolderList.innerHTML = renderSmartFolderList()
+  syncBackdropVisibility()
+}
+
 function renderEditModal() {
   const bookmark = state.editTargetBookmarkId
     ? state.bookmarkMap.get(state.editTargetBookmarkId)
@@ -587,6 +1005,7 @@ function syncBackdropVisibility() {
   const hasOpenModal = Boolean(
     state.isFilterPickerOpen ||
       state.moveTargetBookmarkId ||
+      state.smartFolderPickerOpen ||
       state.editTargetBookmarkId ||
       state.confirmDeleteBookmarkId
   )
@@ -644,6 +1063,71 @@ function renderMoveFolderList(bookmark) {
   }
 
   return markup
+}
+
+function renderSmartFolderList() {
+  const roots = (state.rawTreeRoot?.children || []).filter((node) => !node.url)
+  const query = normalizeText(state.smartFolderSearchQuery)
+  const markup = roots
+    .map((node) => renderSmartFolderNode(node, 0, query))
+    .join('')
+
+  if (!markup.trim()) {
+    return '<div class="state-panel">未找到相关文件夹</div>'
+  }
+
+  return markup
+}
+
+function renderSmartFolderNode(node, depth, query) {
+  if (node.id === ROOT_ID) {
+    return ''
+  }
+
+  const folder = state.folderMap.get(node.id)
+  if (!folder) {
+    return ''
+  }
+
+  const childFolders = (node.children || []).filter((child) => !child.url)
+  const isFilterMode = Boolean(query)
+  const childMarkup = childFolders
+    .map((child) => renderSmartFolderNode(child, depth + 1, query))
+    .join('')
+  const matchesCurrent =
+    !query ||
+    folder.normalizedTitle.includes(query) ||
+    folder.normalizedPath.includes(query)
+
+  if (isFilterMode && !matchesCurrent && !childMarkup) {
+    return ''
+  }
+
+  const isExpanded = isFilterMode || state.moveExpandedFolders.has(node.id)
+
+  return `
+    <div class="picker-row" style="--depth:${depth}">
+      <button
+        class="tree-toggle ${isExpanded ? 'expanded' : ''}"
+        type="button"
+        ${childFolders.length ? '' : 'data-disabled="true"'}
+        data-toggle-smart-folder="${escapeAttr(node.id)}"
+        aria-label="${isExpanded ? '折叠文件夹' : '展开文件夹'}"
+      ></button>
+      <button
+        class="picker-folder-card"
+        type="button"
+        data-smart-select-folder="${escapeAttr(node.id)}"
+      >
+        <span class="folder-kind" aria-hidden="true"></span>
+        <span class="picker-folder-main">
+          <span class="row-title">${highlightText(folder.title, state.smartFolderSearchQuery)}</span>
+          <span class="picker-path" title="${escapeAttr(folder.path)}">${highlightText(folder.path, state.smartFolderSearchQuery)}</span>
+        </span>
+      </button>
+    </div>
+    ${isExpanded ? childMarkup : ''}
+  `
 }
 
 function renderMoveFolderNode(node, depth, query, bookmark) {
@@ -720,6 +1204,56 @@ function renderToasts() {
       `
     })
     .join('')
+}
+
+function handleSmartClassifierClick(event) {
+  const recommendationButton = event.target.closest('[data-smart-recommendation]')
+  if (recommendationButton) {
+    const nextRecommendationId = recommendationButton.getAttribute('data-smart-recommendation')
+    if (nextRecommendationId !== state.smartSelectedRecommendationId) {
+      state.smartSaved = false
+    }
+    state.smartSelectedRecommendationId = nextRecommendationId
+    renderSmartClassifier()
+    return
+  }
+
+  const actionButton = event.target.closest('[data-smart-action]')
+  if (!actionButton) {
+    return
+  }
+
+  const action = actionButton.getAttribute('data-smart-action')
+  if (action === 'classify') {
+    classifyCurrentPage()
+    return
+  }
+
+  if (action === 'manual-folder') {
+    openSmartFolderDialog()
+    return
+  }
+
+  if (action === 'reset') {
+    resetSmartClassification()
+    return
+  }
+
+  if (action === 'exit') {
+    resetSmartClassification()
+    return
+  }
+
+  if (action === 'save') {
+    saveSmartRecommendation()
+  }
+}
+
+function handleSmartClassifierInput(event) {
+  if (event.target?.id === 'smart-title-input') {
+    state.smartSuggestedTitle = event.target.value
+    state.smartSaved = false
+  }
 }
 
 function handleContentClick(event) {
@@ -807,6 +1341,24 @@ function handleMoveListClick(event) {
   }
 }
 
+function handleSmartFolderListClick(event) {
+  const toggle = event.target.closest('[data-toggle-smart-folder]')
+  if (toggle && !state.smartFolderSearchQuery.trim()) {
+    const folderId = toggle.getAttribute('data-toggle-smart-folder')
+    if (!toggle.hasAttribute('data-disabled')) {
+      toggleMoveFolder(folderId)
+      renderSmartFolderModal()
+    }
+    return
+  }
+
+  const folderButton = event.target.closest('[data-smart-select-folder]')
+  if (folderButton) {
+    const folderId = folderButton.getAttribute('data-smart-select-folder')
+    saveCurrentPageToFolder(folderId)
+  }
+}
+
 function handleDocumentPointerDown(event) {
   if (!state.activeMenuBookmarkId) {
     return
@@ -871,6 +1423,11 @@ function handleEscapeAction() {
     return true
   }
 
+  if (['loading', 'results', 'error'].includes(state.smartStatus)) {
+    resetSmartClassification()
+    return true
+  }
+
   if (state.searchQuery) {
     setSearchQuery('', { immediate: true })
     return true
@@ -905,6 +1462,11 @@ function handleToastClick(event) {
 
   if (action === 'undo-delete') {
     undoDelete()
+    return
+  }
+
+  if (action === 'open-bookmark-history') {
+    void openBookmarkHistoryPage()
   }
 }
 
@@ -996,9 +1558,14 @@ function closeDialogs() {
   state.filterSearchQuery = ''
   state.moveTargetBookmarkId = null
   state.moveSearchQuery = ''
+  state.smartFolderPickerOpen = false
+  state.smartFolderSearchQuery = ''
   state.editTargetBookmarkId = null
   state.confirmDeleteBookmarkId = null
   render()
+  if (document.body.classList.contains('smart-active')) {
+    return
+  }
   dom.searchInput.focus()
 }
 
@@ -1018,6 +1585,183 @@ function clearFolderFilter() {
   }
 
   applyFolderFilter(null)
+}
+
+function openSmartFolderDialog() {
+  if (!isSmartClassifiableUrl(state.currentTab?.url)) {
+    showToast({ type: 'error', message: '当前页面无法保存为普通网页书签。' })
+    return
+  }
+
+  state.isFilterPickerOpen = false
+  state.moveTargetBookmarkId = null
+  state.editTargetBookmarkId = null
+  state.confirmDeleteBookmarkId = null
+  state.smartFolderPickerOpen = true
+  state.smartFolderSearchQuery = ''
+  render()
+
+  window.requestAnimationFrame(() => {
+    dom.smartFolderSearchInput.focus()
+  })
+}
+
+function resetSmartClassification() {
+  state.smartRunId += 1
+  state.smartStatus = 'idle'
+  state.smartError = ''
+  state.smartStep = 0
+  state.smartProgressPercent = 0
+  state.smartSuggestedTitle = ''
+  state.smartSummary = ''
+  state.smartRecommendations = []
+  state.smartSelectedRecommendationId = ''
+  state.smartSaving = false
+  state.smartSaved = false
+  renderSmartClassifier()
+}
+
+async function classifyCurrentPage() {
+  if (state.smartStatus === 'loading' || state.smartSaving) {
+    return
+  }
+
+  const currentUrl = String(state.currentTab?.url || '').trim()
+  if (!isSmartClassifiableUrl(currentUrl)) {
+    showToast({ type: 'error', message: '当前页面无法进行智能分类。' })
+    return
+  }
+
+  const runId = state.smartRunId + 1
+  state.smartRunId = runId
+  state.smartStatus = 'loading'
+  state.smartError = ''
+  state.smartStep = 1
+  state.smartProgressPercent = 0
+  state.smartRecommendations = []
+  state.smartSelectedRecommendationId = ''
+  state.smartSaved = false
+  state.smartSuggestedTitle = getCurrentPageTitle()
+  renderSmartClassifier()
+
+  try {
+    const settings = await loadAiProviderSettings()
+    if (state.smartRunId !== runId) return
+    validateSmartAiSettings(settings)
+    await ensureSmartClassifyPermissions(settings, currentUrl)
+    if (state.smartRunId !== runId) return
+
+    const pageContext = await buildCurrentPageContext(currentUrl, settings)
+    if (state.smartRunId !== runId) return
+
+    state.smartStep = 2
+    renderSmartClassifier()
+    const aiResult = await requestSmartClassification({
+      settings,
+      pageContext,
+      currentUrl
+    })
+    if (state.smartRunId !== runId) return
+
+    state.smartStep = 3
+    renderSmartClassifier()
+    await waitForSmartLoadingPaint()
+    if (state.smartRunId !== runId) return
+
+    const recommendations = buildSmartRecommendations(aiResult)
+    state.smartSuggestedTitle = cleanSmartTitle(aiResult.title || getCurrentPageTitle())
+    state.smartSummary = cleanSmartText(aiResult.summary, 360)
+    state.smartRecommendations = recommendations
+    state.smartSelectedRecommendationId = recommendations[0]?.id || ''
+    state.smartStatus = 'results'
+    renderSmartClassifier()
+  } catch (error) {
+    if (state.smartRunId !== runId) return
+    state.smartStatus = 'error'
+    state.smartError = normalizeSmartError(error)
+    renderSmartClassifier()
+  }
+}
+
+async function saveSmartRecommendation() {
+  const recommendation = state.smartRecommendations.find((item) => item.id === state.smartSelectedRecommendationId)
+  if (!recommendation || state.smartSaving || state.smartSaved) {
+    return
+  }
+
+  state.smartSaving = true
+  state.smartSaved = false
+  renderSmartClassifier()
+
+  try {
+    await saveCurrentPageToSmartRecommendation(recommendation)
+  } catch (error) {
+    state.smartSaving = false
+    renderSmartClassifier()
+    showToast({
+      type: 'error',
+      message: error instanceof Error ? `保存失败：${error.message}` : '保存失败，请稍后重试。'
+    })
+  }
+}
+
+async function saveCurrentPageToSmartRecommendation(recommendation) {
+  if (recommendation.kind === 'new') {
+    await saveCurrentPageViaWorker({
+      folderPath: recommendation.path
+    }, { closeModal: false })
+    return
+  }
+
+  await saveCurrentPageToFolder(recommendation.folderId, { closeModal: false })
+}
+
+async function saveCurrentPageToFolder(folderId, { closeModal = true } = {}) {
+  await saveCurrentPageViaWorker({ parentId: folderId }, { closeModal })
+}
+
+async function saveCurrentPageViaWorker({ parentId = '', folderPath = '' } = {}, { closeModal = true } = {}) {
+  try {
+    const currentUrl = String(state.currentTab?.url || '').trim()
+    if (!isSmartClassifiableUrl(currentUrl)) {
+      throw new Error('当前页面不是可保存的普通网页。')
+    }
+
+    if (!parentId && !folderPath) {
+      throw new Error('未找到可保存的目标文件夹。')
+    }
+
+    const nextTitle = cleanSmartTitle(state.smartSuggestedTitle || getCurrentPageTitle())
+    const existingBookmark = state.currentPageBookmarkId
+      ? state.bookmarkMap.get(state.currentPageBookmarkId)
+      : null
+
+    const savedBookmark = await requestBookmarkSave({
+      parentId,
+      folderPath,
+      bookmarkId: existingBookmark?.id || state.currentPageBookmarkId || '',
+      title: nextTitle,
+      url: currentUrl
+    })
+
+    state.smartSaving = false
+    state.smartSaved = true
+    state.smartStatus = 'results'
+    state.currentPageBookmarkId = savedBookmark.bookmarkId || state.currentPageBookmarkId
+    if (closeModal) {
+      closeDialogs()
+    }
+    showToast({ type: 'success', message: '已保存到推荐文件夹' })
+    renderSmartClassifier()
+  } catch (error) {
+    state.smartSaving = false
+    state.smartSaved = false
+    showToast({
+      type: 'error',
+      message: error instanceof Error ? `保存失败：${error.message}` : '保存失败，请稍后重试。'
+    })
+    render()
+  }
 }
 
 async function moveBookmarkToFolder(folderId) {
@@ -1194,6 +1938,501 @@ async function openBookmark(bookmarkId) {
       message: error instanceof Error ? `打开失败：${error.message}` : '打开失败，请稍后重试。'
     })
   }
+}
+
+async function loadAiProviderSettings() {
+  const stored = await getLocalStorage([STORAGE_KEYS.aiProviderSettings])
+  return normalizeAiNamingSettings(stored[STORAGE_KEYS.aiProviderSettings])
+}
+
+function validateSmartAiSettings(settings) {
+  if (!settings.baseUrl || !settings.apiKey || !settings.model) {
+    throw new Error('请先到通用设置配置“自定义AI渠道”。')
+  }
+}
+
+async function ensureSmartClassifyPermissions(settings, currentUrl) {
+  const origins = [
+    getOriginPermissionPattern(settings.baseUrl),
+    getOriginPermissionPattern(currentUrl)
+  ].filter(Boolean)
+
+  if (settings.allowRemoteParsing) {
+    origins.push(AI_NAMING_JINA_READER_ORIGIN)
+  }
+
+  if (!origins.length) {
+    return true
+  }
+
+  const granted = await requestPermissions({ origins: [...new Set(origins)] })
+  if (!granted) {
+    throw new Error('未授予当前网页或 AI 渠道访问权限，无法智能分类。')
+  }
+  return true
+}
+
+async function buildCurrentPageContext(currentUrl, settings) {
+  const timeoutMs = settings.timeoutMs
+  let context = null
+
+  try {
+    const response = await fetchWithSmartTimeout(currentUrl, {
+      method: 'GET',
+      cache: 'no-store',
+      credentials: 'omit',
+      redirect: 'follow',
+      referrerPolicy: 'no-referrer'
+    }, timeoutMs)
+    const finalUrl = String(response.url || currentUrl || '')
+    const contentType = String(response.headers.get('content-type') || '').toLowerCase()
+
+    if (contentType.includes('text/html')) {
+      const html = await response.text()
+      context = extractPageContentFromHtml(html, {
+        url: finalUrl,
+        currentTitle: getCurrentPageTitle(),
+        contentType
+      })
+    } else {
+      context = buildFallbackPageContentFromUrl(finalUrl, {
+        currentTitle: getCurrentPageTitle(),
+        contentType
+      })
+    }
+  } catch (error) {
+    context = buildFallbackPageContentFromUrl(currentUrl, {
+      currentTitle: getCurrentPageTitle(),
+      error
+    })
+  }
+
+  if (settings.allowRemoteParsing) {
+    try {
+      const remoteContext = await fetchRemoteCurrentPageContext(context.finalUrl || currentUrl, timeoutMs, context)
+      return combinePageContentContexts(context, remoteContext)
+    } catch (error) {
+      return normalizePageContentContext({
+        ...context,
+        warnings: [
+          ...(context.warnings || []),
+          `远程解析失败：${normalizeSmartError(error)}`
+        ]
+      })
+    }
+  }
+
+  return context
+}
+
+async function fetchRemoteCurrentPageContext(url, timeoutMs, fallbackContext) {
+  const readerUrl = buildJinaReaderUrl(url)
+  if (!readerUrl) {
+    throw new Error('远程解析 URL 无效。')
+  }
+
+  const response = await fetchWithSmartTimeout(readerUrl, {
+    method: 'GET',
+    cache: 'no-store',
+    credentials: 'omit',
+    redirect: 'follow',
+    referrerPolicy: 'no-referrer',
+    headers: {
+      Accept: 'text/plain, text/markdown;q=0.9, */*;q=0.1'
+    }
+  }, timeoutMs)
+
+  if (!response.ok) {
+    throw new Error(`Jina Reader 返回 HTTP ${response.status}。`)
+  }
+
+  const text = await response.text()
+  return buildRemotePageContentFromText(text, {
+    url: fallbackContext?.finalUrl || url,
+    currentTitle: fallbackContext?.title || getCurrentPageTitle()
+  })
+}
+
+async function requestSmartClassification({ settings, pageContext, currentUrl }) {
+  const endpoint = getAiEndpoint(settings)
+  const requestBody = buildSmartAiRequestBody({
+    settings,
+    pageContext,
+    currentUrl
+  })
+  const response = await fetchWithSmartTimeout(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${settings.apiKey}`
+    },
+    body: JSON.stringify(requestBody)
+  }, settings.timeoutMs)
+  const payload = await response.json().catch(() => null)
+
+  if (!response.ok) {
+    throw new Error(extractAiErrorMessage(payload, response.status))
+  }
+
+  const rawJsonText = settings.apiStyle === 'responses'
+    ? extractResponsesJsonText(payload)
+    : extractChatCompletionsJsonText(payload)
+
+  try {
+    return normalizeSmartAiResult(JSON.parse(rawJsonText))
+  } catch {
+    throw new Error('AI 返回了无法解析的 JSON 结果。')
+  }
+}
+
+function buildSmartAiRequestBody({ settings, pageContext, currentUrl }) {
+  const systemPrompt = [
+    '你是浏览器书签智能分类助手。',
+    '你需要根据当前网页内容和用户已有书签文件夹，为当前网页推荐保存位置。',
+    '如果 page_context.source_contexts 同时包含“本地抽取”和“Jina Reader”，请结合两路内容判断：本地抽取通常保留浏览器可见的 title/meta/链接上下文，Jina Reader 通常提供更干净的 Markdown 正文。',
+    '必须优先推荐 existing_folders 中已经存在的文件夹；如果多个文件夹都匹配，优先选择嵌套层级最深、语义最具体的文件夹。',
+    'existing_folders 数组只能填写输入中存在的 folder_path，不要编造已有文件夹。',
+    'new_folder 只能作为最后的备用建议，路径要短，适合用户新建。',
+    'title 要适合作为浏览器书签标题，简短清晰，不要包含无意义站点后缀。',
+    'confidence 必须是 0 到 1 的数字。'
+  ].join('\n')
+  const userPrompt = JSON.stringify({
+    current_page: {
+      title: getCurrentPageTitle(),
+      url: currentUrl,
+      domain: extractDomain(currentUrl),
+      page_context: buildPageContextForAi(normalizePageContentContext(pageContext), { mainTextLimit: 4200 })
+    },
+    existing_folders: buildSmartFolderCandidates()
+  }, null, 2)
+
+  if (settings.apiStyle === 'chat_completions') {
+    return {
+      model: settings.model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'popup_smart_classification',
+          strict: true,
+          schema: SMART_CLASSIFY_SCHEMA
+        }
+      }
+    }
+  }
+
+  return {
+    model: settings.model,
+    input: [
+      {
+        role: 'system',
+        content: [{ type: 'input_text', text: systemPrompt }]
+      },
+      {
+        role: 'user',
+        content: [{ type: 'input_text', text: userPrompt }]
+      }
+    ],
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'popup_smart_classification',
+        strict: true,
+        schema: SMART_CLASSIFY_SCHEMA
+      }
+    }
+  }
+}
+
+function buildSmartFolderCandidates() {
+  return state.allFolders
+    .slice()
+    .sort((left, right) => {
+      return Number(right.depth || 0) - Number(left.depth || 0) || String(left.path).localeCompare(String(right.path), 'zh-Hans-CN')
+    })
+    .slice(0, 260)
+    .map((folder) => ({
+      folder_id: String(folder.id),
+      folder_path: String(folder.path || folder.title || ''),
+      title: String(folder.title || ''),
+      depth: Number(folder.depth) || 0
+    }))
+}
+
+function buildSmartRecommendations(aiResult) {
+  const byFolderId = new Map()
+
+  for (const suggestion of aiResult.existingFolders) {
+    const folder = findBestExistingFolder(suggestion.folderPath)
+    if (!folder) {
+      continue
+    }
+
+    const previous = byFolderId.get(folder.id)
+    const confidence = normalizeSmartConfidence(suggestion.confidence)
+    if (!previous || confidence > previous.confidence) {
+      byFolderId.set(folder.id, {
+        id: `folder:${folder.id}`,
+        kind: 'existing',
+        folderId: folder.id,
+        title: folder.title,
+        path: folder.path || folder.title,
+        confidence,
+        reason: suggestion.reason || ''
+      })
+    }
+  }
+
+  const existingRecommendations = [...byFolderId.values()]
+    .sort((left, right) => {
+      const leftFolder = state.folderMap.get(left.folderId)
+      const rightFolder = state.folderMap.get(right.folderId)
+      return (
+        Number(right.confidence) - Number(left.confidence) ||
+        Number(rightFolder?.depth || 0) - Number(leftFolder?.depth || 0) ||
+        String(left.path).localeCompare(String(right.path), 'zh-Hans-CN')
+      )
+    })
+    .slice(0, SMART_RECOMMENDATION_LIMIT)
+
+  if (existingRecommendations.length < SMART_RECOMMENDATION_LIMIT) {
+    for (const fallback of buildLocalSmartFolderMatches()) {
+      if (existingRecommendations.some((item) => item.folderId === fallback.folderId)) {
+        continue
+      }
+      existingRecommendations.push(fallback)
+      if (existingRecommendations.length >= SMART_RECOMMENDATION_LIMIT) {
+        break
+      }
+    }
+  }
+
+  const newFolderPath = normalizeSmartFolderPath(aiResult.newFolder?.folderPath)
+  const newRecommendation = newFolderPath
+    ? [{
+        id: 'new-folder',
+        kind: 'new',
+        folderId: '',
+        title: getLastPathSegment(newFolderPath),
+        path: newFolderPath,
+        confidence: normalizeSmartConfidence(aiResult.newFolder?.confidence),
+        reason: aiResult.newFolder?.reason || ''
+      }]
+    : []
+
+  return [...existingRecommendations, ...newRecommendation]
+}
+
+function buildLocalSmartFolderMatches() {
+  const titleText = normalizeText(getCurrentPageTitle())
+  const urlText = normalizeText(state.currentTab?.url || '')
+  const domainText = normalizeText(extractDomain(state.currentTab?.url || ''))
+  const haystack = [titleText, urlText, domainText].filter(Boolean).join(' ')
+
+  return state.allFolders
+    .map((folder) => {
+      const title = normalizeText(folder.title)
+      const path = normalizeText(folder.path)
+      let score = 0
+      if (title && haystack.includes(title)) {
+        score += 0.38
+      }
+      if (path && haystack.includes(path)) {
+        score += 0.28
+      }
+      if (domainText && (title.includes(domainText) || path.includes(domainText))) {
+        score += 0.22
+      }
+      score += Math.min(Number(folder.depth || 0), 6) * 0.025
+
+      return {
+        id: `folder:${folder.id}`,
+        kind: 'existing',
+        folderId: folder.id,
+        title: folder.title,
+        path: folder.path || folder.title,
+        confidence: Math.max(0.52, Math.min(score, 0.82)),
+        reason: '基于当前网页标题、域名和文件夹路径的本地补充匹配。'
+      }
+    })
+    .filter((item) => item.confidence > 0.54)
+    .sort((left, right) => {
+      const leftFolder = state.folderMap.get(left.folderId)
+      const rightFolder = state.folderMap.get(right.folderId)
+      return (
+        Number(right.confidence) - Number(left.confidence) ||
+        Number(rightFolder?.depth || 0) - Number(leftFolder?.depth || 0) ||
+        String(left.path).localeCompare(String(right.path), 'zh-Hans-CN')
+      )
+    })
+}
+
+function normalizeSmartAiResult(payload) {
+  const existingFolders = Array.isArray(payload?.existing_folders)
+    ? payload.existing_folders
+    : []
+  return {
+    title: cleanSmartTitle(payload?.title || getCurrentPageTitle()),
+    summary: cleanSmartText(payload?.summary, 360),
+    existingFolders: existingFolders
+      .map((item) => ({
+        folderPath: cleanSmartText(item?.folder_path, 240),
+        reason: cleanSmartText(item?.reason, 180),
+        confidence: normalizeSmartConfidence(item?.confidence)
+      }))
+      .filter((item) => item.folderPath),
+    newFolder: {
+      folderPath: cleanSmartText(payload?.new_folder?.folder_path, 240),
+      reason: cleanSmartText(payload?.new_folder?.reason, 180),
+      confidence: normalizeSmartConfidence(payload?.new_folder?.confidence)
+    }
+  }
+}
+
+function findBestExistingFolder(rawPath) {
+  const normalizedPath = normalizeText(rawPath)
+  if (!normalizedPath) {
+    return null
+  }
+
+  const folders = state.allFolders.slice()
+  const exactPathMatches = folders.filter((folder) => normalizeText(folder.path || folder.title) === normalizedPath)
+  if (exactPathMatches.length) {
+    return pickDeepestFolder(exactPathMatches)
+  }
+
+  const exactTitleMatches = folders.filter((folder) => normalizeText(folder.title) === normalizedPath)
+  if (exactTitleMatches.length) {
+    return pickDeepestFolder(exactTitleMatches)
+  }
+
+  const segment = normalizeText(getLastPathSegment(rawPath))
+  const segmentMatches = folders.filter((folder) => normalizeText(folder.title) === segment)
+  if (segmentMatches.length) {
+    return pickDeepestFolder(segmentMatches)
+  }
+
+  const containsMatches = folders.filter((folder) => {
+    const folderPath = normalizeText(folder.path || folder.title)
+    return folderPath.includes(normalizedPath) || normalizedPath.includes(folderPath)
+  })
+  return containsMatches.length ? pickDeepestFolder(containsMatches) : null
+}
+
+function pickDeepestFolder(folders) {
+  return folders
+    .slice()
+    .sort((left, right) => {
+      return Number(right.depth || 0) - Number(left.depth || 0) || String(left.path).localeCompare(String(right.path), 'zh-Hans-CN')
+    })[0] || null
+}
+
+function requestPermissions(query) {
+  return new Promise((resolve, reject) => {
+    chrome.permissions.request(query, (granted) => {
+      const error = chrome.runtime.lastError
+      if (error) {
+        reject(new Error(error.message))
+        return
+      }
+
+      resolve(Boolean(granted))
+    })
+  })
+}
+
+function fetchWithSmartTimeout(url, options = {}, timeoutMs = AI_NAMING_DEFAULT_TIMEOUT_MS) {
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => {
+    controller.abort()
+  }, Math.max(1000, Number(timeoutMs) || AI_NAMING_DEFAULT_TIMEOUT_MS))
+
+  return fetch(url, {
+    ...options,
+    signal: controller.signal
+  }).finally(() => {
+    clearTimeout(timeoutId)
+  })
+}
+
+function getAiEndpoint(settings) {
+  const baseUrl = String(settings.baseUrl || '').replace(/\/+$/, '')
+  const suffix = settings.apiStyle === 'chat_completions' ? 'chat/completions' : 'responses'
+  return baseUrl.endsWith(`/${suffix}`) ? baseUrl : `${baseUrl}/${suffix}`
+}
+
+function getOriginPermissionPattern(url) {
+  try {
+    const parsedUrl = new URL(String(url || '').trim())
+    if (!/^https?:$/i.test(parsedUrl.protocol)) {
+      return ''
+    }
+    return `${parsedUrl.origin}/*`
+  } catch {
+    return ''
+  }
+}
+
+function extractResponsesJsonText(payload) {
+  const contentItems = Array.isArray(payload?.output)
+    ? payload.output.flatMap((entry) => Array.isArray(entry?.content) ? entry.content : [])
+    : []
+  const refusalNode = contentItems.find((item) => typeof item?.refusal === 'string' && item.refusal.trim())
+  if (refusalNode?.refusal) {
+    throw new Error(buildAiRefusalError(refusalNode.refusal))
+  }
+
+  if (typeof payload?.output_text === 'string' && payload.output_text.trim()) {
+    return payload.output_text
+  }
+
+  const textNode = contentItems.find((item) => typeof item?.text === 'string' && item.text.trim())
+  if (textNode?.text) {
+    return textNode.text
+  }
+
+  throw new Error('Responses API 返回中未找到可解析的 JSON 文本。')
+}
+
+function extractChatCompletionsJsonText(payload) {
+  const message = payload?.choices?.[0]?.message
+  if (typeof message?.refusal === 'string' && message.refusal.trim()) {
+    throw new Error(buildAiRefusalError(message.refusal))
+  }
+
+  if (typeof message?.content === 'string' && message.content.trim()) {
+    return message.content
+  }
+
+  if (Array.isArray(message?.content)) {
+    const refusalNode = message.content.find((item) => typeof item?.refusal === 'string' && item.refusal.trim())
+    if (refusalNode?.refusal) {
+      throw new Error(buildAiRefusalError(refusalNode.refusal))
+    }
+    const textNode = message.content.find((item) => typeof item?.text === 'string' && item.text.trim())
+    if (textNode?.text) {
+      return textNode.text
+    }
+  }
+
+  throw new Error('Chat Completions 返回中未找到可解析的 JSON 文本。')
+}
+
+function extractAiErrorMessage(payload, statusCode) {
+  const message = payload?.error?.message || payload?.message || ''
+  return message
+    ? `AI 请求失败（${statusCode}）：${message}`
+    : `AI 请求失败（${statusCode}）。`
+}
+
+function buildAiRefusalError(refusal) {
+  const normalizedRefusal = cleanSmartText(refusal, 120)
+  return normalizedRefusal
+    ? `模型拒绝生成结构化结果：${normalizedRefusal}`
+    : '模型拒绝生成结构化结果。'
 }
 
 function updateActiveResultVisibility() {
@@ -1494,10 +2733,97 @@ function clearSearchCaches() {
   state.filteredBookmarksCache = []
 }
 
+function isSmartClassifiableUrl(url) {
+  return /^https?:\/\//i.test(String(url || '').trim())
+}
+
+function getCurrentPageTitle() {
+  return String(state.currentTab?.title || '').trim() || '未命名网页'
+}
+
+function getSmartFallbackIconLabel(title) {
+  const normalized = String(title || '').trim()
+  return normalized ? normalized.slice(0, 1).toUpperCase() : 'C'
+}
+
+function getSmartLoadingLabel() {
+  if (state.smartStep <= 1) {
+    return '读取网页内容…'
+  }
+  if (state.smartStep === 2) {
+    return 'AI 分析内容…'
+  }
+  return '匹配已有文件夹…'
+}
+
+function getSmartProgressTarget() {
+  const step = Math.max(1, Math.min(state.smartStep || 1, SMART_LOADING_STEP_COUNT))
+  return Math.max(10, Math.min((step / SMART_LOADING_STEP_COUNT) * 100, 100))
+}
+
+function waitForSmartLoadingPaint() {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(resolve)
+  })
+}
+
+function cleanSmartTitle(value) {
+  const title = cleanSmartText(value, 90)
+  return title || getCurrentPageTitle()
+}
+
+function cleanSmartText(value, limit = 180) {
+  const text = String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (text.length <= limit) {
+    return text
+  }
+  return `${text.slice(0, Math.max(0, limit - 1)).trim()}…`
+}
+
+function normalizeSmartConfidence(value) {
+  const numeric = Number(value)
+  if (Number.isFinite(numeric)) {
+    return Math.max(0, Math.min(numeric, 1))
+  }
+  return 0
+}
+
+function normalizeSmartFolderPath(value) {
+  const segments = splitSmartFolderPath(value)
+  return segments.join(' / ')
+}
+
+function splitSmartFolderPath(value) {
+  return String(value || '')
+    .split(/\s*(?:\/|>|›|»|\\)\s*/g)
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .slice(0, 5)
+}
+
+function getLastPathSegment(value) {
+  const segments = splitSmartFolderPath(value)
+  return segments.at(-1) || cleanSmartText(value, 60) || '推荐文件夹'
+}
+
+function formatSmartFolderPath(path) {
+  return splitSmartFolderPath(path).join(' · ') || '未归档路径'
+}
+
+function normalizeSmartError(error) {
+  if (error?.name === 'AbortError') {
+    return '请求超时，请稍后重试或调大通用设置中的请求超时。'
+  }
+  return error instanceof Error ? error.message : '智能分类失败，请稍后重试。'
+}
+
 function hasOpenModal() {
   return Boolean(
     state.isFilterPickerOpen ||
       state.moveTargetBookmarkId ||
+      state.smartFolderPickerOpen ||
       state.editTargetBookmarkId ||
       state.confirmDeleteBookmarkId
   )

@@ -26,6 +26,8 @@ test('normalizes AI naming settings with defaults and bounded numeric values', (
   assert.equal(settings.timeoutMs, 5000)
   assert.equal(settings.batchSize, 20)
   assert.equal(settings.autoSelectHighConfidence, false)
+  assert.equal(settings.allowRemoteParsing, false)
+  assert.equal(settings.autoAnalyzeBookmarks, false)
   assert.equal(settings.systemPrompt, 'prompt')
 })
 
@@ -39,7 +41,9 @@ test('normalizes custom model lists from text and removes duplicates case-insens
 test('serializes normalized AI naming settings without sharing mutable arrays', () => {
   const settings = normalizeAiNamingSettings({
     customModels: ['model-a'],
-    fetchedModels: ['model-b']
+    fetchedModels: ['model-b'],
+    allowRemoteParsing: true,
+    autoAnalyzeBookmarks: true
   })
   const serialized = serializeAiNamingSettings(settings)
 
@@ -48,4 +52,6 @@ test('serializes normalized AI naming settings without sharing mutable arrays', 
 
   assert.deepEqual(settings.customModels, ['model-a'])
   assert.deepEqual(settings.fetchedModels, ['model-b'])
+  assert.equal(serialized.allowRemoteParsing, true)
+  assert.equal(serialized.autoAnalyzeBookmarks, true)
 })

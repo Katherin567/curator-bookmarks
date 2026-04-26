@@ -1,4 +1,8 @@
 export const SECTION_META = {
+  general: {
+    label: 'General',
+    title: '通用设置'
+  },
   availability: {
     label: 'Availability',
     title: '书签可用性检测'
@@ -6,6 +10,10 @@ export const SECTION_META = {
   history: {
     label: 'History',
     title: '检测历史'
+  },
+  'bookmark-history': {
+    label: 'Bookmark History',
+    title: '添加书签历史'
   },
   ai: {
     label: 'AI Naming',
@@ -42,6 +50,7 @@ export const AI_NAMING_MAX_TEXT_LENGTH = 80
 export const AI_NAMING_MANAGE_MODELS_VALUE = '__manage_custom_models__'
 export const AI_NAMING_MODELS_ENDPOINT_SUFFIX = 'models'
 export const AI_NAMING_FETCHED_MODELS_LIMIT = 200
+export const AI_NAMING_JINA_READER_ORIGIN = 'https://r.jina.ai/*'
 export const AI_NAMING_PRESET_MODELS = [
   'gpt-5.2',
   'gpt-5.2-pro',
@@ -62,10 +71,33 @@ export const AI_NAMING_RESPONSE_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['bookmark_id', 'action', 'suggested_title', 'confidence', 'reason'],
+        required: [
+          'bookmark_id',
+          'summary',
+          'content_type',
+          'topics',
+          'suggested_title',
+          'suggested_folder',
+          'tags',
+          'action',
+          'confidence',
+          'reason'
+        ],
         properties: {
           bookmark_id: {
             type: 'string'
+          },
+          summary: {
+            type: 'string'
+          },
+          content_type: {
+            type: 'string'
+          },
+          topics: {
+            type: 'array',
+            items: {
+              type: 'string'
+            }
           },
           action: {
             type: 'string',
@@ -74,9 +106,19 @@ export const AI_NAMING_RESPONSE_SCHEMA = {
           suggested_title: {
             type: 'string'
           },
+          suggested_folder: {
+            type: 'string'
+          },
+          tags: {
+            type: 'array',
+            items: {
+              type: 'string'
+            }
+          },
           confidence: {
-            type: 'string',
-            enum: ['high', 'medium', 'low']
+            type: 'number',
+            minimum: 0,
+            maximum: 1
           },
           reason: {
             type: 'string'

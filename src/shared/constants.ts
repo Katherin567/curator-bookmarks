@@ -4,14 +4,16 @@ export const ROOT_ID = '0'
 export const STORAGE_KEYS = {
   ignoreRules: 'curatorBookmarkIgnoreRules',
   detectionHistory: 'curatorBookmarkDetectionHistory',
+  bookmarkAddHistory: 'curatorBookmarkAddHistory',
+  autoAnalyzeQueue: 'curatorBookmarkAutoAnalyzeQueue',
+  pendingAutoAnalyzeNotice: 'curatorBookmarkPendingAutoAnalyzeNotice',
   redirectCache: 'curatorBookmarkRedirectCache',
   recycleBin: 'curatorBookmarkRecycleBin',
-  aiNamingSettings: 'curatorBookmarkAiNamingSettings',
-  aiMetadataCache: 'curatorBookmarkAiMetadataCache',
-  aiResultCache: 'curatorBookmarkAiResultCache'
+  aiProviderSettings: 'curatorBookmarkAiNamingSettings'
 } as const
 
 type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS]
 
+export const BOOKMARK_ADD_HISTORY_LIMIT = 200
 export const RECYCLE_BIN_LIMIT = 200
 export const UNDO_WINDOW_MS = 5000

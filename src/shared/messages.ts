@@ -14,6 +14,15 @@ export interface NavigationCancelMessage {
   checkId: string
 }
 
+export interface BookmarkSaveMessage {
+  type: 'bookmark:save'
+  url: string
+  title: string
+  parentId?: string
+  folderPath?: string
+  bookmarkId?: string
+}
+
 export interface NavigationCheckResult {
   status: NavigationStatus
   finalUrl: string
@@ -22,9 +31,17 @@ export interface NavigationCheckResult {
   networkEvidence?: NavigationNetworkEvidence
 }
 
-interface NavigationCheckResponse {
+export interface BookmarkSaveResult {
+  bookmarkId: string
+  parentId: string
+  title: string
+  url: string
+  created: boolean
+}
+
+interface RuntimeMessageResponse<TResult = unknown> {
   ok: boolean
-  result?: NavigationCheckResult
+  result?: TResult
   error?: string
 }
 
@@ -42,9 +59,14 @@ export function cancelNavigationCheck(checkId: string): Promise<void> {
   return sendRuntimeMessage<void>(message)
 }
 
+export function requestBookmarkSave(payload: Omit<BookmarkSaveMessage, 'type'>): Promise<BookmarkSaveResult> {
+  const message: BookmarkSaveMessage = { type: 'bookmark:save', ...payload }
+  return sendRuntimeMessage<BookmarkSaveResult>(message)
+}
+
 function sendRuntimeMessage<TResult>(message: unknown): Promise<TResult> {
   return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(message, (response: NavigationCheckResponse) => {
+    chrome.runtime.sendMessage(message, (response: RuntimeMessageResponse<TResult>) => {
       const error = chrome.runtime.lastError
       if (error) {
         reject(new Error(error.message))
@@ -52,7 +74,7 @@ function sendRuntimeMessage<TResult>(message: unknown): Promise<TResult> {
       }
 
       if (!response?.ok) {
-        reject(new Error(response?.error || '后台检测失败。'))
+        reject(new Error(response?.error || '后台操作失败。'))
         return
       }
 

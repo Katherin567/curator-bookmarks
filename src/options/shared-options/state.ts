@@ -35,6 +35,8 @@ export function createDefaultAiNamingSettings() {
     timeoutMs: AI_NAMING_DEFAULT_TIMEOUT_MS,
     batchSize: AI_NAMING_DEFAULT_BATCH_SIZE,
     autoSelectHighConfidence: true,
+    allowRemoteParsing: false,
+    autoAnalyzeBookmarks: false,
     systemPrompt: ''
   }
 }
@@ -106,6 +108,7 @@ export const availabilityState = {
 export const managerState = {
   ignoreRules: createEmptyIgnoreRules(),
   historyRuns: [],
+  bookmarkAddHistory: [],
   redirectCache: createEmptyRedirectCache(),
   previousHistoryMap: new Map(),
   historyLastRunAt: 0,
@@ -137,11 +140,6 @@ export const aiNamingState = {
   scopeFolderId: '',
   bookmarks: [],
   requestOrigins: [],
-  metadataCache: {},
-  resultCache: {},
-  cacheDirty: false,
-  metadataCacheHits: 0,
-  resultCacheHits: 0,
   paused: false,
   pauseResolvers: [],
   filterStatus: 'all',
