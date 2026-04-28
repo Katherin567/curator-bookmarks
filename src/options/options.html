@@ -60,14 +60,41 @@
                 <div class="ai-feature-switch-row">
                   <div class="ai-feature-switch-copy">
                     <div class="ai-feature-title-row">
-                      <strong>自动分析</strong>
+                      <strong>
+                        自动分析
+                        <span
+                          class="ai-help-tooltip"
+                          tabindex="0"
+                          aria-label="添加网页书签后，自动分析内容并归类到合适文件夹。完成后会通过 Chrome 通知和弹窗提示结果。"
+                          data-tooltip="添加网页书签后，自动分析内容并归类到合适文件夹。完成后会通过 Chrome 通知和弹窗提示结果。"
+                        >?</span>
+                      </strong>
                       <span id="ai-auto-analyze-status" class="options-chip muted ai-inline-status">未开启</span>
                     </div>
-                    <p>添加网页书签后，自动分析内容并归类到合适文件夹。</p>
-                    <p class="ai-feature-secondary">完成后会通过 Chrome 通知和弹窗提示结果。</p>
                   </div>
                   <label class="ai-switch" for="ai-auto-analyze-bookmarks">
                     <input id="ai-auto-analyze-bookmarks" type="checkbox" aria-label="自动分析">
+                    <span class="ai-switch-track" aria-hidden="true"></span>
+                  </label>
+                </div>
+
+                <div class="ai-feature-switch-row">
+                  <div class="ai-feature-switch-copy">
+                    <div class="ai-feature-title-row">
+                      <strong>
+                        开启 Jina Reader 远程解析 URL
+                        <span
+                          class="ai-help-tooltip"
+                          tabindex="0"
+                          aria-label="开启后，弹窗智能分类、AI 命名和自动分析会同时使用本地抽取内容和 Jina Reader 解析内容。第三方服务会接收目标 URL，请谨慎用于隐私页面。"
+                          data-tooltip="开启后，弹窗智能分类、AI 命名和自动分析会同时使用本地抽取内容和 Jina Reader 解析内容。第三方服务会接收目标 URL，请谨慎用于隐私页面。"
+                        >?</span>
+                      </strong>
+                      <span id="ai-remote-parser-status" class="options-chip muted ai-inline-status">未开启</span>
+                    </div>
+                  </div>
+                  <label class="ai-switch" for="ai-allow-remote-parser">
+                    <input id="ai-allow-remote-parser" type="checkbox" aria-label="开启 Jina Reader 远程解析 URL">
                     <span class="ai-switch-track" aria-hidden="true"></span>
                   </label>
                 </div>
@@ -513,7 +540,7 @@
             <div class="options-group ai-naming-settings-card">
               <div class="ai-feature-settings-head">
                 <h2 class="ai-settings-subtitle">命名与内容理解</h2>
-                <p class="ai-provider-subtitle">这些选项会影响需要读取网页内容的 AI 功能，包括 AI 命名和弹窗智能分类；通用 AI 渠道仍在“通用设置”里配置。</p>
+                <p class="ai-provider-subtitle">这些选项只影响批量 AI 命名；通用 AI 渠道和 Jina Reader 远程解析在“通用设置”里配置。</p>
               </div>
 
               <div class="ai-feature-switch-row">
@@ -525,25 +552,6 @@
                   <span class="ai-switch-track" aria-hidden="true"></span>
                 </label>
               </div>
-
-              <div class="ai-feature-switch-row">
-                <div class="ai-feature-switch-copy">
-                  <strong>
-                    开启 Jina Reader 远程解析 URL
-                  <span
-                    class="ai-help-tooltip"
-                    tabindex="0"
-                    aria-label="开启后，每条书签都会同时使用本地抽取内容和 Jina Reader 解析内容。这样可以保留本地页面元信息与链接上下文，同时获得更干净的 Markdown 正文，AI 判断标题、类型和文件夹时更稳。"
-                    data-tooltip="开启后，每条书签都会同时使用本地抽取内容和 Jina Reader 解析内容。这样可以保留本地页面元信息与链接上下文，同时获得更干净的 Markdown 正文，AI 判断标题、类型和文件夹时更稳。"
-                  >?</span>
-                  </strong>
-                </div>
-                <label class="ai-switch" for="ai-allow-remote-parser">
-                  <input id="ai-allow-remote-parser" type="checkbox" aria-label="开启 Jina Reader 远程解析 URL">
-                  <span class="ai-switch-track" aria-hidden="true"></span>
-                </label>
-              </div>
-              <p class="ai-provider-field-tip">开启后，每条书签都会请求 Jina Reader；第三方服务会接收目标 URL，请谨慎用于隐私页面。</p>
 
               <details class="ai-advanced-details">
                 <summary class="ai-advanced-summary">展开命名高级选项</summary>
@@ -869,7 +877,7 @@
     </div>
 
     <div id="delete-modal-backdrop" class="options-modal-backdrop hidden" aria-hidden="true">
-      <section class="options-modal" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
+      <section class="options-modal" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title" aria-describedby="delete-modal-copy">
         <p class="options-section-label danger">Delete</p>
         <h2 id="delete-modal-title">批量删除高置信异常书签？</h2>
         <p id="delete-modal-copy" class="options-modal-copy">这些书签会从 Chrome 书签中移除，并直接从当前高置信异常列表里消失；低置信异常结果会保留。</p>
@@ -880,8 +888,20 @@
       </section>
     </div>
 
+    <div id="confirm-modal-backdrop" class="options-modal-backdrop hidden" aria-hidden="true">
+      <section class="options-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title" aria-describedby="confirm-modal-copy">
+        <p id="confirm-modal-label" class="options-section-label danger">Confirm</p>
+        <h2 id="confirm-modal-title">确认操作？</h2>
+        <p id="confirm-modal-copy" class="options-modal-copy">请确认是否继续。</p>
+        <div class="options-modal-actions">
+          <button id="cancel-confirm-modal" class="options-button secondary" type="button">取消</button>
+          <button id="confirm-modal-confirm" class="options-button danger" type="button">确认</button>
+        </div>
+      </section>
+    </div>
+
     <div id="move-modal-backdrop" class="options-modal-backdrop hidden" aria-hidden="true">
-      <section class="options-modal options-modal-wide" role="dialog" aria-modal="true" aria-labelledby="move-modal-title">
+      <section class="options-modal options-modal-wide" role="dialog" aria-modal="true" aria-labelledby="move-modal-title" aria-describedby="move-modal-copy">
         <p class="options-section-label">Move</p>
         <h2 id="move-modal-title">批量移动书签</h2>
         <p id="move-modal-copy" class="options-modal-copy">请选择一个目标文件夹，所选书签会被一起移动到该位置。</p>
@@ -899,7 +919,7 @@
     </div>
 
     <div id="scope-modal-backdrop" class="options-modal-backdrop hidden" aria-hidden="true">
-      <section class="options-modal options-modal-wide" role="dialog" aria-modal="true" aria-labelledby="scope-modal-title">
+      <section class="options-modal options-modal-wide" role="dialog" aria-modal="true" aria-labelledby="scope-modal-title" aria-describedby="scope-modal-copy">
         <p class="options-section-label">Folder Filter</p>
         <h2 id="scope-modal-title">选择筛选文件夹</h2>
         <p id="scope-modal-copy" class="options-modal-copy">请选择一个文件夹作为当前筛选范围，可直接搜索文件夹名称或路径。</p>
@@ -917,11 +937,11 @@
     </div>
 
     <div id="ai-model-modal-backdrop" class="options-modal-backdrop hidden" aria-hidden="true">
-      <section class="options-modal ai-model-modal" role="dialog" aria-modal="true" aria-labelledby="ai-model-modal-title">
+      <section class="options-modal ai-model-modal" role="dialog" aria-modal="true" aria-labelledby="ai-model-modal-title" aria-describedby="ai-model-modal-copy">
         <button id="close-ai-model-modal" class="options-modal-close" type="button" aria-label="关闭自定义模型弹窗">×</button>
         <p class="options-section-label">Custom Models</p>
         <h2 id="ai-model-modal-title">自定义模型列表</h2>
-        <p class="options-modal-copy">输入自定义模型名称，多个模型可用换行、英文逗号或分号分隔。保存后会出现在模型下拉列表里。</p>
+        <p id="ai-model-modal-copy" class="options-modal-copy">输入自定义模型名称，多个模型可用换行、英文逗号或分号分隔。保存后会出现在模型下拉列表里。</p>
         <label class="ai-settings-field" for="ai-custom-models-input">
           <span>模型列表</span>
           <textarea
@@ -940,7 +960,7 @@
     </div>
 
     <div id="ai-model-picker-modal-backdrop" class="options-modal-backdrop hidden" aria-hidden="true">
-      <section class="options-modal options-modal-wide" role="dialog" aria-modal="true" aria-labelledby="ai-model-picker-modal-title">
+      <section class="options-modal options-modal-wide" role="dialog" aria-modal="true" aria-labelledby="ai-model-picker-modal-title" aria-describedby="ai-model-picker-modal-copy">
         <button id="close-ai-model-picker-modal" class="options-modal-close" type="button" aria-label="关闭 AI 模型弹窗">×</button>
         <p class="options-section-label">AI Models</p>
         <h2 id="ai-model-picker-modal-title">选择 AI 模型</h2>

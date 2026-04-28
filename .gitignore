@@ -7,4 +7,17 @@ release/
 .env
 .env.local
 .codex
+.vscode/
+
+# Local assistant/tooling artifacts
+.agents/
+.claude/
+CLAUDE.md
+skills-lock.json
+
+# Local design drafts
+DESIGN.md
+DESIGN.json
+PRODUCT.md
+
 docs/FEATURE_IMPLEMENTATION.md

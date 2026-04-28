@@ -50,6 +50,46 @@
           </div>
         </section>
 
+        <section class="settings-section" aria-labelledby="settings-folder-title">
+          <h2 id="settings-folder-title">书签来源</h2>
+          <div class="settings-card">
+            <label class="setting-row">
+              <span>隐藏文件夹名</span>
+              <input id="folder-hide-names" class="setting-switch-input" type="checkbox">
+              <span class="setting-switch" aria-hidden="true"></span>
+            </label>
+            <div class="folder-source-panel">
+              <div class="folder-source-summary">
+                <span>已选文件夹</span>
+                <strong id="folder-selected-count">0</strong>
+              </div>
+              <div id="folder-selected-list" class="folder-selected-list"></div>
+              <button
+                id="folder-candidates-toggle"
+                class="folder-candidates-toggle"
+                type="button"
+                aria-expanded="false"
+                aria-controls="folder-candidates-panel"
+              >
+                <span data-folder-toggle-label>展开候选文件夹</span>
+                <span class="folder-candidates-chevron" aria-hidden="true"></span>
+              </button>
+              <div id="folder-candidates-panel" class="folder-candidates-panel" hidden>
+                <label class="setting-floating-field folder-search-field">
+                  <input
+                    id="folder-candidate-search"
+                    class="setting-text-input"
+                    type="search"
+                    placeholder="搜索文件夹"
+                    spellcheck="false"
+                  >
+                </label>
+                <div id="folder-candidate-list" class="folder-candidate-list" role="listbox"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="settings-section" aria-labelledby="settings-background-title">
           <h2 id="settings-background-title">背景</h2>
           <div class="settings-card">

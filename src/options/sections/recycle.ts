@@ -234,7 +234,16 @@ export async function clearRecycleBin(callbacks) {
     return
   }
 
-  if (!window.confirm(`确认清空回收站中的 ${managerState.recycleBin.length} 条记录？此操作不会再恢复这些记录。`)) {
+  const confirmed = callbacks.confirm
+    ? await callbacks.confirm({
+        title: `清空 ${managerState.recycleBin.length} 条回收站记录？`,
+        copy: '这些回收站记录会被永久移除，之后无法再从扩展内恢复。',
+        confirmLabel: '清空回收站',
+        label: 'Delete',
+        tone: 'danger'
+      })
+    : true
+  if (!confirmed) {
     return
   }
 

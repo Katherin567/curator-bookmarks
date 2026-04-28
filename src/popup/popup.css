@@ -643,6 +643,7 @@ body.smart-active .smart-classifier {
 
 .smart-page-card,
 .smart-loading-card,
+.smart-permission-card,
 .smart-result-card {
   width: 100%;
   border: 1px solid #343438;
@@ -897,6 +898,60 @@ body.smart-active .smart-classifier {
   background: linear-gradient(90deg, #f5f5f7, #8e8e93);
   transition: width 760ms cubic-bezier(0.22, 1, 0.36, 1);
   will-change: width;
+}
+
+.smart-permission-card {
+  padding: 12px;
+}
+
+.smart-permission-card .smart-panel-head {
+  margin-bottom: 12px;
+}
+
+.smart-permission-body {
+  display: grid;
+  gap: 10px;
+}
+
+.smart-permission-copy,
+.smart-permission-error {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.smart-permission-copy {
+  color: var(--text-soft);
+}
+
+.smart-permission-error {
+  color: #ffd1cc;
+}
+
+.smart-permission-origins {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.smart-permission-origins span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 6px 8px;
+  border: 1px solid #343438;
+  border-radius: 6px;
+  background: #171719;
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.smart-permission-card .smart-classify-button,
+.smart-permission-card .smart-cancel-button {
+  width: 100%;
+  min-height: 38px;
 }
 
 .smart-result-card {
@@ -2452,6 +2507,7 @@ body::after {
 
 .smart-page-card,
 .smart-loading-card,
+.smart-permission-card,
 .smart-result-card {
   border-radius: 8px;
   border-color: #242424;
@@ -2489,6 +2545,7 @@ body::after {
 }
 
 .smart-loading-card,
+.smart-permission-card,
 .smart-result-card {
   padding: 12px;
 }

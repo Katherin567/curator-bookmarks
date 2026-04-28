@@ -184,12 +184,30 @@ export function renderBookmarkAddHistory(): void {
     : '<div class="detect-empty">还没有自动分析添加记录。开启“自动分析”后，新增普通网页书签并完成分类时会写入这里。</div>'
 }
 
-export async function clearBookmarkAddHistory(callbacks: { renderAvailabilitySection: () => void }): Promise<void> {
+export async function clearBookmarkAddHistory(callbacks: {
+  renderAvailabilitySection: () => void
+  confirm?: (options: {
+    title: string
+    copy: string
+    confirmLabel: string
+    label: string
+    tone: string
+  }) => Promise<boolean>
+}): Promise<void> {
   if (!managerState.bookmarkAddHistory.length) {
     return
   }
 
-  if (!window.confirm(`确认清空最近 ${managerState.bookmarkAddHistory.length} 条添加书签历史？`)) {
+  const confirmed = callbacks.confirm
+    ? await callbacks.confirm({
+        title: `清空 ${managerState.bookmarkAddHistory.length} 条添加书签历史？`,
+        copy: '只会清空自动分析添加记录，不会删除已经保存的书签。',
+        confirmLabel: '清空添加历史',
+        label: 'Confirm',
+        tone: 'warning'
+      })
+    : true
+  if (!confirmed) {
     return
   }
 

@@ -133,6 +133,13 @@ export const managerState = {
   aiModelModalOpen: false,
   aiModelPickerModalOpen: false,
   aiModelPickerSearchQuery: '',
+  confirmModalOpen: false,
+  confirmModalTone: 'danger',
+  confirmModalLabel: 'Confirm',
+  confirmModalTitle: '确认操作？',
+  confirmModalCopy: '请确认是否继续。',
+  confirmModalConfirmLabel: '确认',
+  confirmModalCancelLabel: '取消',
   aiRevealApiKey: false
 }
 
@@ -156,6 +163,7 @@ export const aiNamingState = {
   applying: false,
   requestingPermission: false,
   permissionGranted: false,
+  remoteParserPermissionGranted: false,
   checkedBookmarks: 0,
   eligibleBookmarks: 0,
   suggestedCount: 0,

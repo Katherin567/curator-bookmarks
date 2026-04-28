@@ -346,7 +346,16 @@ export async function deleteSelectedRedirects(callbacks) {
   }
 
   const targetIds = [...managerState.selectedRedirectIds]
-  if (!window.confirm(`确认删除这 ${targetIds.length} 条重定向书签，并移入回收站？`)) {
+  const confirmed = callbacks.confirm
+    ? await callbacks.confirm({
+        title: `删除 ${targetIds.length} 条重定向书签？`,
+        copy: '这些书签会从 Chrome 书签中移除并进入回收站。重定向缓存中的对应结果也会被清理。',
+        confirmLabel: '删除并移入回收站',
+        label: 'Delete',
+        tone: 'danger'
+      })
+    : true
+  if (!confirmed) {
     return
   }
 
@@ -361,7 +370,16 @@ export async function deleteAllRedirects(callbacks) {
   }
 
   const targetIds = results.map((result) => result.id)
-  if (!window.confirm(`确认删除当前本区全部 ${targetIds.length} 条重定向书签，并移入回收站？`)) {
+  const confirmed = callbacks.confirm
+    ? await callbacks.confirm({
+        title: `删除本区全部 ${targetIds.length} 条重定向书签？`,
+        copy: '这些书签会从 Chrome 书签中移除并进入回收站。此操作只影响当前重定向更新区。',
+        confirmLabel: '删除本区并移入回收站',
+        label: 'Delete',
+        tone: 'danger'
+      })
+    : true
+  if (!confirmed) {
     return
   }
 

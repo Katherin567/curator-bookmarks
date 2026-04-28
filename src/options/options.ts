@@ -161,6 +161,18 @@ import {
 
 let availabilityRenderFrame = 0
 let availabilityPauseResolvers = []
+let confirmModalResolve = null
+let activeManagedModalKey = ''
+let modalReturnFocusElement = null
+
+const MODAL_FOCUSABLE_SELECTOR = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled]):not([type="hidden"])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])'
+].join(',')
 
 const LEGACY_AI_NAMING_CACHE_STORAGE_KEYS = [
   'curatorBookmarkAiMetadataCache',
@@ -172,11 +184,13 @@ const recycleCallbacks = {
   hydrateAvailabilityCatalog,
   getBookmarkRecord,
   removeDeletedResultsFromState,
-  saveRedirectCache
+  saveRedirectCache,
+  confirm: requestConfirmation
 }
 
 const duplicatesCallbacks = {
   renderAvailabilitySection,
+  confirm: requestConfirmation,
   recycleCallbacks
 }
 
@@ -184,12 +198,14 @@ const redirectsCallbacks = {
   renderAvailabilitySection,
   getCurrentAvailabilityScopeMeta,
   hydrateAvailabilityCatalog,
+  confirm: requestConfirmation,
   recycleCallbacks
 }
 
 const historyCallbacks = {
   renderAvailabilitySection,
-  getCurrentAvailabilityScopeMeta
+  getCurrentAvailabilityScopeMeta,
+  confirm: requestConfirmation
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -294,6 +310,7 @@ function syncPageSection() {
 
 function bindEvents() {
   const ignoreCallbacks = {
+    confirm: requestConfirmation,
     onIgnoreRulesChanged() {
       repartitionAvailabilityResultsByIgnoreRules()
       renderAvailabilitySection()
@@ -329,7 +346,7 @@ function bindEvents() {
   dom.aiTimeoutMs?.addEventListener('input', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
   dom.aiBatchSize?.addEventListener('input', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
   dom.aiAutoSelectHigh?.addEventListener('change', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
-  dom.aiAllowRemoteParser?.addEventListener('change', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
+  dom.aiAllowRemoteParser?.addEventListener('change', handleAiRemoteParserChange)
   dom.aiAutoAnalyzeBookmarks?.addEventListener('change', handleAutoAnalyzeBookmarksChange)
   dom.aiSystemPrompt?.addEventListener('input', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
   dom.availabilityAction?.addEventListener('click', handleAvailabilityAction)
@@ -339,7 +356,10 @@ function bindEvents() {
   dom.availabilityResults?.addEventListener('click', handleFailedResultAction)
   dom.availabilityClearHistory?.addEventListener('click', () => clearDetectionHistoryLogs(historyCallbacks))
   dom.availabilityToggleHistoryLogs?.addEventListener('click', () => toggleHistoryLogsCollapsed(historyCallbacks))
-  dom.bookmarkAddHistoryClear?.addEventListener('click', () => clearBookmarkAddHistory({ renderAvailabilitySection }))
+  dom.bookmarkAddHistoryClear?.addEventListener('click', () => clearBookmarkAddHistory({
+    renderAvailabilitySection,
+    confirm: requestConfirmation
+  }))
   dom.availabilityClearSelection?.addEventListener('click', clearAvailabilitySelection)
   dom.availabilitySelectionRetest?.addEventListener('click', retestSelectedAvailabilityResults)
   dom.availabilitySelectionPromote?.addEventListener('click', () => {
@@ -390,6 +410,8 @@ function bindEvents() {
   dom.deleteFailedBookmarks?.addEventListener('click', openDeleteModal)
   dom.cancelDeleteModal?.addEventListener('click', closeDeleteModal)
   dom.confirmDeleteModal?.addEventListener('click', confirmDeleteFailedBookmarks)
+  dom.cancelConfirmModal?.addEventListener('click', () => resolveConfirmModal(false))
+  dom.confirmModalConfirm?.addEventListener('click', () => resolveConfirmModal(true))
   dom.moveSearchInput?.addEventListener('input', (event) => {
     managerState.moveSearchQuery = event.target.value
     renderMoveModal()
@@ -423,6 +445,11 @@ function bindEvents() {
       closeDeleteModal()
     }
   })
+  dom.confirmModalBackdrop?.addEventListener('click', (event) => {
+    if (event.target === dom.confirmModalBackdrop) {
+      resolveConfirmModal(false)
+    }
+  })
   dom.moveModalBackdrop?.addEventListener('click', (event) => {
     if (event.target === dom.moveModalBackdrop) {
       closeMoveModal()
@@ -450,7 +477,17 @@ function getCurrentSectionKey() {
 }
 
 function handleKeydown(event) {
+  if (event.key === 'Tab' && trapModalFocus(event)) {
+    return
+  }
+
   if (event.key !== 'Escape') {
+    return
+  }
+
+  if (managerState.confirmModalOpen) {
+    event.preventDefault()
+    resolveConfirmModal(false)
     return
   }
 
@@ -482,6 +519,114 @@ function handleKeydown(event) {
     event.preventDefault()
     closeDeleteModal()
   }
+}
+
+function setManagedModalHidden(key, backdrop, open, preferredFocus = null) {
+  if (!backdrop) {
+    return
+  }
+
+  const wasOpen = backdrop.dataset.modalOpen === 'true'
+  setModalHidden(backdrop, open)
+  backdrop.dataset.modalOpen = open ? 'true' : 'false'
+
+  if (open && !wasOpen) {
+    activeManagedModalKey = key
+    const activeElement = document.activeElement
+    if (activeElement instanceof HTMLElement && !backdrop.contains(activeElement)) {
+      modalReturnFocusElement = activeElement
+    }
+    window.setTimeout(() => focusModal(backdrop, preferredFocus), 0)
+    return
+  }
+
+  if (!open && wasOpen && activeManagedModalKey === key) {
+    activeManagedModalKey = ''
+    const returnFocusElement = modalReturnFocusElement
+    modalReturnFocusElement = null
+    window.setTimeout(() => {
+      if (
+        activeManagedModalKey ||
+        !(returnFocusElement instanceof HTMLElement) ||
+        !document.contains(returnFocusElement) ||
+        returnFocusElement.hasAttribute('disabled')
+      ) {
+        return
+      }
+      returnFocusElement.focus()
+    }, 0)
+  }
+}
+
+function focusModal(backdrop, preferredFocus = null) {
+  const target = preferredFocus instanceof HTMLElement && backdrop.contains(preferredFocus)
+    ? preferredFocus
+    : getModalFocusableElements(backdrop)[0]
+
+  if (target instanceof HTMLElement) {
+    target.focus()
+  }
+}
+
+function getModalFocusableElements(backdrop) {
+  return [...backdrop.querySelectorAll(MODAL_FOCUSABLE_SELECTOR)].filter((element) => {
+    return (
+      element instanceof HTMLElement &&
+      !element.hasAttribute('disabled') &&
+      !element.getAttribute('aria-hidden') &&
+      element.getClientRects().length > 0
+    )
+  })
+}
+
+function getOpenModalBackdrop() {
+  return [
+    dom.confirmModalBackdrop,
+    dom.aiModelModalBackdrop,
+    dom.aiModelPickerModalBackdrop,
+    dom.scopeModalBackdrop,
+    dom.moveModalBackdrop,
+    dom.deleteModalBackdrop
+  ].find((backdrop) => {
+    return backdrop?.dataset?.modalOpen === 'true' && !backdrop.classList.contains('hidden')
+  }) || null
+}
+
+function trapModalFocus(event) {
+  const backdrop = getOpenModalBackdrop()
+  if (!backdrop) {
+    return false
+  }
+
+  const focusableElements = getModalFocusableElements(backdrop)
+  if (!focusableElements.length) {
+    event.preventDefault()
+    return true
+  }
+
+  const firstElement = focusableElements[0]
+  const lastElement = focusableElements[focusableElements.length - 1]
+  const activeElement = document.activeElement
+
+  if (event.shiftKey && activeElement === firstElement) {
+    event.preventDefault()
+    lastElement.focus()
+    return true
+  }
+
+  if (!event.shiftKey && activeElement === lastElement) {
+    event.preventDefault()
+    firstElement.focus()
+    return true
+  }
+
+  if (!backdrop.contains(activeElement)) {
+    event.preventDefault()
+    firstElement.focus()
+    return true
+  }
+
+  return false
 }
 
 function handleReviewResultAction(event) {
@@ -772,6 +917,7 @@ async function hydrateAiNamingPermissionState() {
   scheduleAvailabilityRender()
 
   try {
+    aiNamingState.remoteParserPermissionGranted = await hasJinaReaderPermission()
     const permissionOrigins = getAiNamingPermissionOrigins()
     if (!permissionOrigins.length) {
       aiNamingState.permissionGranted = false
@@ -783,6 +929,7 @@ async function hydrateAiNamingPermissionState() {
     })
   } catch (error) {
     aiNamingState.permissionGranted = false
+    aiNamingState.remoteParserPermissionGranted = false
   } finally {
     aiNamingState.requestingPermission = false
     renderAvailabilitySection()
@@ -1327,7 +1474,9 @@ function renderAvailabilitySection() {
   renderScopeModal()
   renderMoveModal()
   renderDeleteModal()
+  renderConfirmModal()
   renderAiModelModal()
+  renderAiModelPickerModal()
 }
 
 function renderActiveOptionsSection() {
@@ -1489,7 +1638,7 @@ async function saveAiNamingSettingsFromDom({ validateRequired = true } = {}) {
         throw new Error('未授予 AI 服务地址访问权限，无法开启自动分析。')
       }
       if (settings.allowRemoteParsing) {
-        const jinaGranted = await requestPermissions({ origins: [AI_NAMING_JINA_READER_ORIGIN] })
+        const jinaGranted = await ensureJinaReaderPermission({ interactive: true })
         if (!jinaGranted) {
           throw new Error('未授予 Jina Reader 访问权限，无法开启远程解析自动分析。')
         }
@@ -1521,6 +1670,54 @@ async function handleAutoAnalyzeBookmarksChange() {
   if (!saved) {
     aiNamingManagerState.settings = previousSettings
     dom.aiAutoAnalyzeBookmarks.checked = Boolean(previousSettings.autoAnalyzeBookmarks)
+    renderAvailabilitySection()
+  }
+}
+
+async function handleAiRemoteParserChange() {
+  if (!dom.aiAllowRemoteParser) {
+    return
+  }
+
+  const nextEnabled = Boolean(dom.aiAllowRemoteParser.checked)
+
+  try {
+    aiNamingState.lastError = ''
+    const settings = normalizeAiNamingSettings({
+      ...syncAiNamingSettingsDraftFromDom(),
+      allowRemoteParsing: nextEnabled
+    })
+
+    if (nextEnabled) {
+      aiNamingState.requestingPermission = true
+      renderAvailabilitySection()
+
+      const granted = await ensureJinaReaderPermission({ interactive: true })
+      if (!granted) {
+        throw new Error('未授予 Jina Reader 访问权限，远程解析已保持关闭。')
+      }
+
+      settings.allowRemoteParsing = true
+      aiNamingState.remoteParserPermissionGranted = true
+    } else {
+      settings.allowRemoteParsing = false
+    }
+
+    await saveAiNamingSettings(settings)
+    aiNamingState.settingsDirty = false
+    await hydrateAiNamingPermissionState()
+  } catch (error) {
+    const settings = normalizeAiNamingSettings({
+      ...aiNamingManagerState.settings,
+      allowRemoteParsing: false
+    })
+    await saveAiNamingSettings(settings).catch(() => {})
+    aiNamingState.settingsDirty = false
+    aiNamingState.remoteParserPermissionGranted = await hasJinaReaderPermission()
+    aiNamingState.lastError =
+      error instanceof Error ? error.message : 'Jina Reader 远程解析开启失败，请稍后重试。'
+  } finally {
+    aiNamingState.requestingPermission = false
     renderAvailabilitySection()
   }
 }
@@ -1598,6 +1795,25 @@ function renderAiNamingSection() {
   }
   if (dom.aiAllowRemoteParser) {
     dom.aiAllowRemoteParser.checked = Boolean(settings.allowRemoteParsing)
+    dom.aiAllowRemoteParser.disabled =
+      aiNamingState.running ||
+      aiNamingState.applying ||
+      aiNamingState.requestingPermission
+  }
+  if (dom.aiRemoteParserStatus) {
+    const remoteParserEnabled = Boolean(settings.allowRemoteParsing)
+    const remoteParserGranted = Boolean(aiNamingState.remoteParserPermissionGranted)
+    const statusTone = remoteParserEnabled
+      ? remoteParserGranted
+        ? 'success'
+        : 'warning'
+      : 'muted'
+    dom.aiRemoteParserStatus.className = `options-chip ai-inline-status ${statusTone}`
+    dom.aiRemoteParserStatus.textContent = remoteParserEnabled
+      ? remoteParserGranted
+        ? '已授权'
+        : '待授权'
+      : '未开启'
   }
   if (dom.aiAutoAnalyzeBookmarks) {
     dom.aiAutoAnalyzeBookmarks.checked = Boolean(settings.autoAnalyzeBookmarks)
@@ -1871,7 +2087,12 @@ function renderAiModelPickerModal() {
     return
   }
 
-  setModalHidden(dom.aiModelPickerModalBackdrop, managerState.aiModelPickerModalOpen)
+  setManagedModalHidden(
+    'ai-model-picker',
+    dom.aiModelPickerModalBackdrop,
+    managerState.aiModelPickerModalOpen,
+    dom.aiModelPickerSearchInput
+  )
 
   if (!managerState.aiModelPickerModalOpen) {
     return
@@ -2157,7 +2378,12 @@ function renderAiModelModal() {
     return
   }
 
-  setModalHidden(dom.aiModelModalBackdrop, managerState.aiModelModalOpen)
+  setManagedModalHidden(
+    'ai-model',
+    dom.aiModelModalBackdrop,
+    managerState.aiModelModalOpen,
+    dom.aiCustomModelsInput
+  )
 
   if (!managerState.aiModelModalOpen) {
     return
@@ -2604,6 +2830,38 @@ async function ensureAiNamingProviderPermission({ interactive = true, baseUrl = 
   } finally {
     aiNamingState.requestingPermission = false
     renderAvailabilitySection()
+  }
+}
+
+async function ensureJinaReaderPermission({ interactive = true } = {}) {
+  if (await hasJinaReaderPermission()) {
+    aiNamingState.remoteParserPermissionGranted = true
+    return true
+  }
+
+  if (!interactive) {
+    aiNamingState.remoteParserPermissionGranted = false
+    return false
+  }
+
+  try {
+    aiNamingState.remoteParserPermissionGranted = await requestPermissions({
+      origins: [AI_NAMING_JINA_READER_ORIGIN]
+    })
+    return aiNamingState.remoteParserPermissionGranted
+  } catch (error) {
+    aiNamingState.remoteParserPermissionGranted = false
+    return false
+  }
+}
+
+async function hasJinaReaderPermission() {
+  try {
+    return await containsPermissions({
+      origins: [AI_NAMING_JINA_READER_ORIGIN]
+    })
+  } catch (error) {
+    return false
   }
 }
 
@@ -3759,7 +4017,12 @@ function renderScopeModal() {
     return
   }
 
-  setModalHidden(dom.scopeModalBackdrop, managerState.scopeModalOpen)
+  setManagedModalHidden(
+    'scope',
+    dom.scopeModalBackdrop,
+    managerState.scopeModalOpen,
+    dom.scopeSearchInput
+  )
 
   if (!managerState.scopeModalOpen) {
     return
@@ -3898,7 +4161,12 @@ function renderMoveModal() {
     return
   }
 
-  setModalHidden(dom.moveModalBackdrop, managerState.moveModalOpen)
+  setManagedModalHidden(
+    'move',
+    dom.moveModalBackdrop,
+    managerState.moveModalOpen,
+    dom.moveSearchInput
+  )
 
   if (!managerState.moveModalOpen) {
     return
@@ -4448,7 +4716,14 @@ async function deleteSelectedAvailabilityResults() {
     return
   }
 
-  if (!window.confirm(`确认删除这 ${selectedResults.length} 条已选书签，并移入回收站？`)) {
+  const confirmed = await requestConfirmation({
+    title: `删除 ${selectedResults.length} 条异常书签？`,
+    copy: '这些书签会从 Chrome 书签中移除并进入回收站。你仍可在回收站里恢复它们，当前选择会被清空。',
+    confirmLabel: '删除并移入回收站',
+    label: 'Delete',
+    tone: 'danger'
+  })
+  if (!confirmed) {
     return
   }
 
@@ -4697,12 +4972,99 @@ function renderDeleteModal() {
     return
   }
 
-  setModalHidden(dom.deleteModalBackdrop, availabilityState.deleteModalOpen)
+  setManagedModalHidden(
+    'delete',
+    dom.deleteModalBackdrop,
+    availabilityState.deleteModalOpen,
+    dom.cancelDeleteModal
+  )
   dom.deleteModalCopy.textContent = availabilityState.failedResults.length
     ? `确认删除当前 ${availabilityState.failedResults.length} 条高置信异常书签？这些书签会从 Chrome 书签中移除，并先进入回收站；低置信异常结果会保留。`
     : '这些书签会从 Chrome 书签中移除，并先进入回收站；低置信异常结果会保留。'
   dom.confirmDeleteModal.disabled = availabilityState.deleting
   dom.confirmDeleteModal.textContent = availabilityState.deleting ? '正在删除…' : '确认删除'
+}
+
+function requestConfirmation({
+  title = '确认操作？',
+  copy = '请确认是否继续。',
+  confirmLabel = '确认',
+  cancelLabel = '取消',
+  tone = 'danger',
+  label = ''
+} = {}) {
+  if (!dom.confirmModalBackdrop) {
+    return Promise.resolve(false)
+  }
+
+  if (confirmModalResolve) {
+    confirmModalResolve(false)
+    confirmModalResolve = null
+  }
+
+  managerState.confirmModalOpen = true
+  managerState.confirmModalTone = tone === 'warning' ? 'warning' : 'danger'
+  managerState.confirmModalLabel = label || (managerState.confirmModalTone === 'warning' ? 'Confirm' : 'Delete')
+  managerState.confirmModalTitle = title
+  managerState.confirmModalCopy = copy
+  managerState.confirmModalConfirmLabel = confirmLabel
+  managerState.confirmModalCancelLabel = cancelLabel
+
+  return new Promise((resolve) => {
+    confirmModalResolve = resolve
+    renderConfirmModal()
+  })
+}
+
+function resolveConfirmModal(confirmed) {
+  if (!managerState.confirmModalOpen && !confirmModalResolve) {
+    return
+  }
+
+  managerState.confirmModalOpen = false
+  renderConfirmModal()
+
+  const resolver = confirmModalResolve
+  confirmModalResolve = null
+  if (resolver) {
+    resolver(Boolean(confirmed))
+  }
+}
+
+function renderConfirmModal() {
+  if (!dom.confirmModalBackdrop) {
+    return
+  }
+
+  setManagedModalHidden(
+    'confirm',
+    dom.confirmModalBackdrop,
+    managerState.confirmModalOpen,
+    dom.cancelConfirmModal
+  )
+
+  if (!managerState.confirmModalOpen) {
+    return
+  }
+
+  const tone = managerState.confirmModalTone === 'warning' ? 'warning' : 'danger'
+  if (dom.confirmModalLabel) {
+    dom.confirmModalLabel.className = `options-section-label ${tone}`
+    dom.confirmModalLabel.textContent = managerState.confirmModalLabel
+  }
+  if (dom.confirmModalTitle) {
+    dom.confirmModalTitle.textContent = managerState.confirmModalTitle
+  }
+  if (dom.confirmModalCopy) {
+    dom.confirmModalCopy.textContent = managerState.confirmModalCopy
+  }
+  if (dom.cancelConfirmModal) {
+    dom.cancelConfirmModal.textContent = managerState.confirmModalCancelLabel
+  }
+  if (dom.confirmModalConfirm) {
+    dom.confirmModalConfirm.className = `options-button ${tone === 'danger' ? 'danger' : ''}`.trim()
+    dom.confirmModalConfirm.textContent = managerState.confirmModalConfirmLabel
+  }
 }
 
 function reconcileCatalogAfterMutation() {

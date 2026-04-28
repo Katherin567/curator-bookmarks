@@ -231,6 +231,38 @@ async function removeIgnoreRule(kind, ruleId, callbacks) {
 }
 
 export async function clearIgnoreRules(kind, callbacks) {
+  const meta = {
+    bookmark: {
+      label: '书签',
+      count: managerState.ignoreRules.bookmarks.length
+    },
+    domain: {
+      label: '域名',
+      count: managerState.ignoreRules.domains.length
+    },
+    folder: {
+      label: '文件夹',
+      count: managerState.ignoreRules.folders.length
+    }
+  }[kind]
+
+  if (!meta?.count) {
+    return
+  }
+
+  const confirmed = callbacks?.confirm
+    ? await callbacks.confirm({
+        title: `清空 ${meta.count} 条${meta.label}忽略规则？`,
+        copy: '清空后，对应异常会重新出现在后续检测结果中。已保存的书签不会被删除。',
+        confirmLabel: '清空规则',
+        label: 'Confirm',
+        tone: 'warning'
+      })
+    : true
+  if (!confirmed) {
+    return
+  }
+
   if (kind === 'bookmark') {
     managerState.ignoreRules.bookmarks = []
     managerState.ignoreRules.bookmarkIds = new Set()

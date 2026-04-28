@@ -22,27 +22,41 @@ export function extractBookmarkData(
 
   function walk(
     node: chrome.bookmarks.BookmarkTreeNode,
-    ancestors: Array<{ id: string; title: string }> = []
+    ancestorIds: string[] = [],
+    folderPath = ''
   ): void {
     const isRoot = node.id === ROOT_ID
-    const currentAncestors =
-      isRoot || !node.title
-        ? ancestors
-        : [...ancestors, { id: String(node.id), title: node.title }]
+    const nodeId = String(node.id)
+    const nodeTitle = String(node.title || '')
+    const hasPathSegment = !isRoot && Boolean(nodeTitle)
+    const currentAncestorIds = hasPathSegment ? [...ancestorIds, nodeId] : ancestorIds
+    const currentPath = hasPathSegment
+      ? folderPath
+        ? `${folderPath} / ${nodeTitle}`
+        : nodeTitle
+      : folderPath
 
     if (!node.url && !isRoot) {
-      const folderPathSegments = currentAncestors
-        .map((folder) => folder.title)
-        .filter(Boolean)
+      const children = node.children || []
+      let folderCount = 0
+      let bookmarkCount = 0
+      for (const child of children) {
+        if (child.url) {
+          bookmarkCount += 1
+        } else {
+          folderCount += 1
+        }
+      }
+
       const folder: FolderRecord = {
-        id: String(node.id),
-        title: node.title || '未命名文件夹',
-        path: folderPathSegments.join(' / '),
-        normalizedTitle: normalizeText(node.title || ''),
-        normalizedPath: normalizeText(folderPathSegments.join(' / ')),
-        depth: currentAncestors.length,
-        folderCount: (node.children || []).filter((child) => !child.url).length,
-        bookmarkCount: (node.children || []).filter((child) => Boolean(child.url)).length
+        id: nodeId,
+        title: nodeTitle || '未命名文件夹',
+        path: currentPath,
+        normalizedTitle: normalizeText(nodeTitle),
+        normalizedPath: normalizeText(currentPath),
+        depth: currentAncestorIds.length,
+        folderCount,
+        bookmarkCount
       }
 
       folders.push(folder)
@@ -51,9 +65,6 @@ export function extractBookmarkData(
 
     for (const child of node.children || []) {
       if (child.url) {
-        const pathSegments = currentAncestors
-          .map((folder) => folder.title)
-          .filter(Boolean)
         const bookmark: BookmarkRecord = {
           id: String(child.id),
           title: child.title || '未命名书签',
@@ -63,9 +74,9 @@ export function extractBookmarkData(
           normalizedUrl: normalizeUrl(child.url),
           duplicateKey: buildDuplicateKey(child.url),
           domain: extractDomain(child.url),
-          path: pathSegments.join(' / '),
-          ancestorIds: currentAncestors.map((folder) => String(folder.id)),
-          parentId: String(child.parentId || currentAncestors.at(-1)?.id || ''),
+          path: currentPath,
+          ancestorIds: currentAncestorIds.slice(),
+          parentId: String(child.parentId || currentAncestorIds.at(-1) || ''),
           index: typeof child.index === 'number' ? child.index : 0,
           dateAdded: Number(child.dateAdded) || 0
         }
@@ -73,7 +84,7 @@ export function extractBookmarkData(
         bookmarks.push(bookmark)
         bookmarkMap.set(bookmark.id, bookmark)
       } else {
-        walk(child, currentAncestors)
+        walk(child, currentAncestorIds, currentPath)
       }
     }
   }

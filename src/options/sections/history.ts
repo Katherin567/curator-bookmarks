@@ -519,7 +519,16 @@ export async function clearDetectionHistoryLogs(callbacks) {
     return
   }
 
-  if (!window.confirm(`确认清空最近 ${managerState.historyRuns.length} 次检测历史日志？`)) {
+  const confirmed = callbacks.confirm
+    ? await callbacks.confirm({
+        title: `清空 ${managerState.historyRuns.length} 次检测历史日志？`,
+        copy: '检测历史、趋势对比和连续异常计数会被清除。当前检测结果不会被删除。',
+        confirmLabel: '清空历史日志',
+        label: 'Confirm',
+        tone: 'warning'
+      })
+    : true
+  if (!confirmed) {
     return
   }
 

@@ -52,6 +52,8 @@ const SEARCH_DEBOUNCE_MS = 140
 const MAX_RESULTS = 20
 const SEARCH_CACHE_LIMIT = 40
 const SEARCH_PREFILTER_THRESHOLD = 1200
+const SEARCH_ASYNC_THRESHOLD = 1200
+const SEARCH_CHUNK_SIZE = 260
 const SMART_RECOMMENDATION_LIMIT = 3
 const SMART_LOADING_STEP_COUNT = 3
 
@@ -107,9 +109,12 @@ const state = {
   searchResults: [],
   activeResultIndex: 0,
   searchTimer: null,
+  searchRunId: 0,
+  searchPending: false,
   searchCache: new Map(),
   filteredBookmarksCacheKey: '',
   filteredBookmarksCache: [],
+  contentRenderHtml: '',
   activeMenuBookmarkId: null,
   moveTargetBookmarkId: null,
   moveSearchQuery: '',
@@ -130,6 +135,7 @@ const state = {
   smartSaving: false,
   smartSaved: false,
   smartRunId: 0,
+  smartPermissionRequest: null,
   lastDeletedBookmark: null,
   toasts: [],
   toastTimers: new Map()
@@ -382,13 +388,17 @@ async function refreshData({ initial = false, preserveSearch = true } = {}) {
       state.debouncedQuery = state.searchQuery.trim()
       runSearch()
     } else {
+      state.searchRunId += 1
       state.searchQuery = ''
       state.debouncedQuery = ''
       state.searchResults = []
       state.activeResultIndex = 0
+      state.searchPending = false
       dom.searchInput.value = ''
     }
   } catch (error) {
+    state.searchRunId += 1
+    state.searchPending = false
     state.loadError = error instanceof Error ? error.message : '书签加载失败，请稍后重试。'
     state.searchResults = []
   } finally {
@@ -414,7 +424,7 @@ async function hydrateCurrentTabState() {
     return
   }
 
-  if (!['loading', 'results', 'saving'].includes(state.smartStatus)) {
+  if (!['loading', 'results', 'permission', 'saving'].includes(state.smartStatus)) {
     state.smartStatus = 'idle'
   }
 }
@@ -462,28 +472,74 @@ function setSearchQuery(value, { immediate = false } = {}) {
 function runSearch() {
   const query = state.debouncedQuery
   const normalizedQuery = normalizeQuery(query)
+  const runId = state.searchRunId + 1
+  state.searchRunId = runId
 
   if (!normalizedQuery) {
     state.searchResults = []
     state.activeResultIndex = 0
+    state.searchPending = false
     return
   }
 
   try {
     const cacheKey = getSearchCacheKey(normalizedQuery)
     const cachedResults = state.searchCache.get(cacheKey)
-    const results = cachedResults || searchBookmarks(normalizedQuery, getFilteredBookmarks())
+    const bookmarks = getFilteredBookmarks()
 
-    if (!cachedResults) {
-      cacheSearchResults(cacheKey, results)
+    if (cachedResults) {
+      state.searchPending = false
+      state.searchResults = cachedResults.slice(0, MAX_RESULTS)
+      state.activeResultIndex = Math.min(
+        state.activeResultIndex,
+        Math.max(state.searchResults.length - 1, 0)
+      )
+      return
     }
 
-    state.searchResults = results.slice(0, MAX_RESULTS)
-    state.activeResultIndex = Math.min(
-      state.activeResultIndex,
-      Math.max(state.searchResults.length - 1, 0)
-    )
+    if (bookmarks.length < SEARCH_ASYNC_THRESHOLD) {
+      const results = searchBookmarks(normalizedQuery, bookmarks)
+      cacheSearchResults(cacheKey, results)
+      state.searchPending = false
+      state.searchResults = results.slice(0, MAX_RESULTS)
+      state.activeResultIndex = Math.min(
+        state.activeResultIndex,
+        Math.max(state.searchResults.length - 1, 0)
+      )
+      return
+    }
+
+    state.searchPending = true
+    state.searchResults = []
+    state.activeResultIndex = 0
+
+    searchBookmarksCooperatively(normalizedQuery, bookmarks, runId)
+      .then((results) => {
+        if (state.searchRunId !== runId) {
+          return
+        }
+
+        cacheSearchResults(cacheKey, results)
+        state.searchPending = false
+        state.searchResults = results.slice(0, MAX_RESULTS)
+        state.activeResultIndex = Math.min(
+          state.activeResultIndex,
+          Math.max(state.searchResults.length - 1, 0)
+        )
+        render()
+      })
+      .catch((error) => {
+        if (state.searchRunId !== runId) {
+          return
+        }
+
+        state.searchPending = false
+        state.searchResults = []
+        state.loadError = error instanceof Error ? error.message : '查询失败，请重试。'
+        render()
+      })
   } catch (error) {
+    state.searchPending = false
     state.searchResults = []
     state.loadError = error instanceof Error ? error.message : '查询失败，请重试。'
   }
@@ -515,7 +571,9 @@ function renderBanner() {
 
 function renderToolbar() {
   if (state.debouncedQuery) {
-    dom.viewCaption.textContent = `搜索结果 · ${state.searchResults.length} 条`
+    dom.viewCaption.textContent = state.searchPending
+      ? '搜索中…'
+      : `搜索结果 · ${state.searchResults.length} 条`
     return
   }
 
@@ -539,7 +597,7 @@ function renderSmartClassifier() {
   const currentUrl = String(state.currentTab?.url || '').trim()
   const smartAvailable = isSmartClassifiableUrl(currentUrl)
   const smartOverlayActive =
-    smartAvailable && ['loading', 'results', 'error'].includes(state.smartStatus)
+    smartAvailable && ['loading', 'results', 'error', 'permission'].includes(state.smartStatus)
 
   document.body.classList.toggle('smart-active', smartOverlayActive)
   dom.smartClassifier.classList.toggle('hidden', !smartAvailable)
@@ -577,6 +635,11 @@ function renderSmartClassifier() {
       <div class="error-banner">${escapeHtml(state.smartError || '智能分类失败，请稍后重试。')}</div>
       ${renderSmartManualButton()}
     `
+    return
+  }
+
+  if (state.smartStatus === 'permission') {
+    dom.smartClassifier.innerHTML = renderSmartPermissionCard()
     return
   }
 
@@ -618,6 +681,46 @@ function renderSmartManualButton() {
       <span class="smart-folder-icon" aria-hidden="true"></span>
       <span>手动选择文件夹</span>
     </button>
+  `
+}
+
+function renderSmartPermissionCard() {
+  const origins = Array.isArray(state.smartPermissionRequest?.origins)
+    ? state.smartPermissionRequest.origins
+    : []
+
+  return `
+    <article class="smart-permission-card">
+      <div class="smart-panel-head">
+        <p>需要授权 AI 渠道</p>
+        ${renderSmartExitButton()}
+      </div>
+      <div class="smart-permission-body">
+        <p class="smart-permission-copy">
+          智能分类需要访问你配置的 AI 服务地址。当前网页不会申请额外权限，正文读取失败时会用标题和 URL 继续推荐。
+        </p>
+        ${
+          origins.length
+            ? `<div class="smart-permission-origins">${origins
+                .map((origin) => `<span>${escapeHtml(formatPermissionOrigin(origin))}</span>`)
+                .join('')}</div>`
+            : ''
+        }
+        ${
+          state.smartError
+            ? `<p class="smart-permission-error">${escapeHtml(state.smartError)}</p>`
+            : ''
+        }
+      </div>
+      <div class="smart-actions">
+        <button class="smart-cancel-button" type="button" data-smart-action="manual-folder">
+          手动选择
+        </button>
+        <button class="smart-classify-button" type="button" data-smart-action="grant-permission">
+          授权并继续
+        </button>
+      </div>
+    </article>
   `
 }
 
@@ -775,15 +878,24 @@ function renderSmartRecommendation(recommendation, selectedId) {
 
 function renderMainContent() {
   const hasQuery = Boolean(state.debouncedQuery)
-  const showEmptySearch = hasQuery && !state.searchResults.length && !state.isLoading
+  const showSearchLoading =
+    hasQuery &&
+    state.searchPending &&
+    !state.searchResults.length &&
+    !state.isLoading
+  const showEmptySearch =
+    hasQuery &&
+    !state.searchPending &&
+    !state.searchResults.length &&
+    !state.isLoading
   const currentRoot = getCurrentTreeRoot()
   const showEmptyTree =
     !hasQuery &&
     !state.isLoading &&
     (!currentRoot || !(currentRoot.children || []).length)
 
-  dom.loadingState.classList.toggle('hidden', !state.isLoading)
-  dom.content.classList.toggle('hidden', state.isLoading || showEmptySearch || showEmptyTree)
+  dom.loadingState.classList.toggle('hidden', !(state.isLoading || showSearchLoading))
+  dom.content.classList.toggle('hidden', state.isLoading || showSearchLoading || showEmptySearch || showEmptyTree)
   dom.emptyState.classList.toggle('hidden', !(showEmptySearch || showEmptyTree))
 
   if (showEmptySearch) {
@@ -801,8 +913,29 @@ function renderMainContent() {
     return
   }
 
-  dom.content.innerHTML = hasQuery ? renderSearchResults() : renderTreeView()
+  if (showSearchLoading) {
+    dom.loadingState.innerHTML = renderPopupLoadingStack('正在搜索书签…')
+    return
+  }
+
+  replaceContentHtml(hasQuery ? renderSearchResults() : renderTreeView(), {
+    preserveScroll: !hasQuery
+  })
   updateActiveResultVisibility()
+}
+
+function replaceContentHtml(nextHtml, { preserveScroll = false } = {}) {
+  if (state.contentRenderHtml === nextHtml) {
+    return
+  }
+
+  const previousScrollTop = dom.content.scrollTop
+  state.contentRenderHtml = nextHtml
+  dom.content.innerHTML = nextHtml
+
+  if (preserveScroll) {
+    dom.content.scrollTop = previousScrollTop
+  }
 }
 
 function renderTreeView() {
@@ -1254,6 +1387,11 @@ function handleSmartClassifierClick(event) {
     return
   }
 
+  if (action === 'grant-permission') {
+    grantSmartPermissionAndClassify()
+    return
+  }
+
   if (action === 'manual-folder') {
     openSmartFolderDialog()
     return
@@ -1643,10 +1781,11 @@ function resetSmartClassification() {
   state.smartSelectedRecommendationId = ''
   state.smartSaving = false
   state.smartSaved = false
+  state.smartPermissionRequest = null
   renderSmartClassifier()
 }
 
-async function classifyCurrentPage() {
+async function classifyCurrentPage({ requestMissingPermissions = false } = {}) {
   if (state.smartStatus === 'loading' || state.smartSaving) {
     return
   }
@@ -1667,13 +1806,16 @@ async function classifyCurrentPage() {
   state.smartSelectedRecommendationId = ''
   state.smartSaved = false
   state.smartSuggestedTitle = getCurrentPageTitle()
+  state.smartPermissionRequest = null
   renderSmartClassifier()
 
   try {
     const settings = await loadAiProviderSettings()
     if (state.smartRunId !== runId) return
     validateSmartAiSettings(settings)
-    await ensureSmartClassifyPermissions(settings, currentUrl)
+    await ensureSmartClassifyPermissions(settings, {
+      interactive: requestMissingPermissions
+    })
     if (state.smartRunId !== runId) return
 
     const pageContext = await buildCurrentPageContext(currentUrl, settings)
@@ -1702,8 +1844,49 @@ async function classifyCurrentPage() {
     renderSmartClassifier()
   } catch (error) {
     if (state.smartRunId !== runId) return
+    if (isSmartPermissionRequiredError(error)) {
+      state.smartStatus = 'permission'
+      state.smartPermissionRequest = error.smartPermissionRequest
+      state.smartError = error.message
+      renderSmartClassifier()
+      return
+    }
     state.smartStatus = 'error'
     state.smartError = normalizeSmartError(error)
+    renderSmartClassifier()
+  }
+}
+
+async function grantSmartPermissionAndClassify() {
+  if (state.smartStatus === 'loading' || state.smartSaving) {
+    return
+  }
+
+  const origins = Array.isArray(state.smartPermissionRequest?.origins)
+    ? [...new Set(state.smartPermissionRequest.origins)].filter(Boolean)
+    : []
+
+  if (!origins.length) {
+    await classifyCurrentPage({ requestMissingPermissions: true })
+    return
+  }
+
+  try {
+    const granted = await requestPermissions({ origins })
+    if (!granted) {
+      throw createSmartPermissionRequiredError(origins, '未完成 AI 渠道授权，暂时无法智能分类。')
+    }
+    await classifyCurrentPage()
+  } catch (error) {
+    if (isSmartPermissionRequiredError(error)) {
+      state.smartStatus = 'permission'
+      state.smartPermissionRequest = error.smartPermissionRequest
+      state.smartError = error.message
+    } else {
+      state.smartStatus = 'permission'
+      state.smartPermissionRequest = { origins }
+      state.smartError = normalizeSmartError(error)
+    }
     renderSmartClassifier()
   }
 }
@@ -1976,23 +2159,27 @@ function validateSmartAiSettings(settings) {
   }
 }
 
-async function ensureSmartClassifyPermissions(settings, currentUrl) {
+async function ensureSmartClassifyPermissions(settings, { interactive = false } = {}) {
   const origins = [
-    getOriginPermissionPattern(settings.baseUrl),
-    getOriginPermissionPattern(currentUrl)
+    getOriginPermissionPattern(settings.baseUrl)
   ].filter(Boolean)
-
-  if (settings.allowRemoteParsing) {
-    origins.push(AI_NAMING_JINA_READER_ORIGIN)
-  }
 
   if (!origins.length) {
     return true
   }
 
-  const granted = await requestPermissions({ origins: [...new Set(origins)] })
+  const missingOrigins = await getMissingPermissionOrigins(origins)
+  if (!missingOrigins.length) {
+    return true
+  }
+
+  if (!interactive) {
+    throw createSmartPermissionRequiredError(missingOrigins)
+  }
+
+  const granted = await requestPermissions({ origins: missingOrigins })
   if (!granted) {
-    throw new Error('未授予当前网页或 AI 渠道访问权限，无法智能分类。')
+    throw createSmartPermissionRequiredError(missingOrigins, '未完成 AI 渠道授权，暂时无法智能分类。')
   }
   return true
 }
@@ -2033,6 +2220,17 @@ async function buildCurrentPageContext(currentUrl, settings) {
   }
 
   if (settings.allowRemoteParsing) {
+    const canUseRemoteParser = await hasOptionalOriginPermission(AI_NAMING_JINA_READER_ORIGIN)
+    if (!canUseRemoteParser) {
+      return normalizePageContentContext({
+        ...context,
+        warnings: [
+          ...(context.warnings || []),
+          'Jina Reader 未授权，本次已跳过远程解析。'
+        ]
+      })
+    }
+
     try {
       const remoteContext = await fetchRemoteCurrentPageContext(context.finalUrl || currentUrl, timeoutMs, context)
       return combinePageContentContexts(context, remoteContext)
@@ -2369,6 +2567,74 @@ function requestPermissions(query) {
   })
 }
 
+function containsPermissions(query) {
+  return new Promise((resolve, reject) => {
+    chrome.permissions.contains(query, (granted) => {
+      const error = chrome.runtime.lastError
+      if (error) {
+        reject(new Error(error.message))
+        return
+      }
+
+      resolve(Boolean(granted))
+    })
+  })
+}
+
+async function getMissingPermissionOrigins(origins) {
+  const uniqueOrigins = [...new Set(origins)].filter(Boolean)
+  if (!uniqueOrigins.length) {
+    return []
+  }
+
+  try {
+    if (await containsPermissions({ origins: uniqueOrigins })) {
+      return []
+    }
+  } catch (error) {
+  }
+
+  const missingOrigins = []
+  for (const origin of uniqueOrigins) {
+    try {
+      if (!(await containsPermissions({ origins: [origin] }))) {
+        missingOrigins.push(origin)
+      }
+    } catch (error) {
+      missingOrigins.push(origin)
+    }
+  }
+  return missingOrigins
+}
+
+async function hasOptionalOriginPermission(origin) {
+  if (!origin) {
+    return false
+  }
+
+  try {
+    return await containsPermissions({ origins: [origin] })
+  } catch (error) {
+    return false
+  }
+}
+
+function createSmartPermissionRequiredError(origins, message = '需要授权 AI 渠道后才能智能分类。') {
+  const error = new Error(message)
+  error.smartPermissionRequest = {
+    origins: [...new Set(origins)].filter(Boolean)
+  }
+  return error
+}
+
+function isSmartPermissionRequiredError(error) {
+  return Boolean(error?.smartPermissionRequest?.origins)
+}
+
+function formatPermissionOrigin(origin) {
+  return String(origin || '').replace(/\/\*$/, '')
+}
+
 function fetchWithSmartTimeout(url, options = {}, timeoutMs = AI_NAMING_DEFAULT_TIMEOUT_MS) {
   const controller = new AbortController()
   const timeoutId = window.setTimeout(() => {
@@ -2532,24 +2798,127 @@ function searchBookmarks(query, bookmarks) {
   const normalizedQuery = normalizeQuery(query)
   const queryTerms = getQueryTerms(normalizedQuery)
   const candidates = getSearchCandidates(bookmarks, normalizedQuery, queryTerms)
+  const results = []
 
-  return candidates
-    .map((bookmark) => {
+  for (const bookmark of candidates) {
+    const score = scoreBookmark(bookmark, normalizedQuery, queryTerms)
+    if (score > 0) {
+      appendTopSearchResult(results, { ...bookmark, score })
+    }
+  }
+
+  return results
+}
+
+async function searchBookmarksCooperatively(query, bookmarks, runId) {
+  const normalizedQuery = normalizeQuery(query)
+  const queryTerms = getQueryTerms(normalizedQuery)
+  const candidates = await getSearchCandidatesCooperatively(
+    bookmarks,
+    normalizedQuery,
+    queryTerms,
+    runId
+  )
+  const results = []
+
+  for (let index = 0; index < candidates.length; index += SEARCH_CHUNK_SIZE) {
+    assertSearchRunActive(runId)
+    const chunk = candidates.slice(index, index + SEARCH_CHUNK_SIZE)
+
+    for (const bookmark of chunk) {
       const score = scoreBookmark(bookmark, normalizedQuery, queryTerms)
-      return score > 0 ? { ...bookmark, score } : null
-    })
-    .filter(Boolean)
-    .sort((left, right) => {
-      if (right.score !== left.score) {
-        return right.score - left.score
+      if (score > 0) {
+        appendTopSearchResult(results, { ...bookmark, score })
       }
+    }
 
-      if (left.title.length !== right.title.length) {
-        return left.title.length - right.title.length
+    if (index + SEARCH_CHUNK_SIZE < candidates.length) {
+      await yieldSearchWork()
+    }
+  }
+
+  return results
+}
+
+async function getSearchCandidatesCooperatively(bookmarks, normalizedQuery, queryTerms, runId) {
+  if (bookmarks.length < SEARCH_PREFILTER_THRESHOLD) {
+    return bookmarks
+  }
+
+  const requiredTerms = queryTerms.length ? queryTerms : [normalizedQuery]
+  const directMatches = []
+
+  for (let index = 0; index < bookmarks.length; index += SEARCH_CHUNK_SIZE) {
+    assertSearchRunActive(runId)
+    for (const bookmark of bookmarks.slice(index, index + SEARCH_CHUNK_SIZE)) {
+      const searchText = bookmark.searchText || `${bookmark.normalizedTitle} ${bookmark.normalizedUrl}`
+      if (requiredTerms.every((term) => searchText.includes(term))) {
+        directMatches.push(bookmark)
       }
+    }
 
-      return left.path.localeCompare(right.path, 'zh-Hans-CN')
-    })
+    if (index + SEARCH_CHUNK_SIZE < bookmarks.length) {
+      await yieldSearchWork()
+    }
+  }
+
+  if (directMatches.length) {
+    return directMatches
+  }
+
+  const prefix = normalizedQuery.slice(0, Math.min(normalizedQuery.length, 3))
+  if (!prefix) {
+    return bookmarks
+  }
+
+  const prefixMatches = []
+  for (let index = 0; index < bookmarks.length; index += SEARCH_CHUNK_SIZE) {
+    assertSearchRunActive(runId)
+    for (const bookmark of bookmarks.slice(index, index + SEARCH_CHUNK_SIZE)) {
+      const searchText = bookmark.searchText || `${bookmark.normalizedTitle} ${bookmark.normalizedUrl}`
+      if (searchText.includes(prefix)) {
+        prefixMatches.push(bookmark)
+      }
+    }
+
+    if (index + SEARCH_CHUNK_SIZE < bookmarks.length) {
+      await yieldSearchWork()
+    }
+  }
+
+  return prefixMatches.length ? prefixMatches : bookmarks
+}
+
+function appendTopSearchResult(results, result) {
+  results.push(result)
+  results.sort(compareSearchResults)
+  if (results.length > MAX_RESULTS) {
+    results.length = MAX_RESULTS
+  }
+}
+
+function compareSearchResults(left, right) {
+  if (right.score !== left.score) {
+    return right.score - left.score
+  }
+
+  if (left.title.length !== right.title.length) {
+    return left.title.length - right.title.length
+  }
+
+  return left.path.localeCompare(right.path, 'zh-Hans-CN')
+}
+
+function assertSearchRunActive(runId) {
+  if (state.searchRunId !== runId) {
+    throw new Error('search-cancelled')
+  }
+}
+
+function yieldSearchWork() {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(resolve)
+  })
 }
 
 function getSearchCandidates(bookmarks, normalizedQuery, queryTerms) {

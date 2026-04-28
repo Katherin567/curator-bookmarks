@@ -10,15 +10,19 @@ import {
   updateBookmark
 } from '../shared/bookmarks-api.js'
 import {
-  findBookmarksBar
+  extractBookmarkData,
+  findBookmarksBar,
+  findNodeById
 } from '../shared/bookmark-tree.js'
 import { appendRecycleEntry } from '../shared/recycle-bin.js'
 import { getLocalStorage, setLocalStorage } from '../shared/storage.js'
+import type { FolderRecord } from '../shared/types.js'
 
-const NEW_TAB_FOLDER_TITLE = '标签页'
+const DEFAULT_NEW_TAB_FOLDER_TITLE = '标签页'
 const FAVICON_SIZE = 64
 const CUSTOM_ICON_MAX_BYTES = 2 * 1024 * 1024
 const BOOKMARK_DRAG_LONG_PRESS_MS = 320
+const FOLDER_DRAG_LONG_PRESS_MS = BOOKMARK_DRAG_LONG_PRESS_MS
 const ICON_PAGE_WIDTH_REFERENCE_PX = 1920
 const BACKGROUND_MEDIA_DB_NAME = 'curatorNewTabBackgroundMedia'
 const BACKGROUND_MEDIA_STORE = 'media'
@@ -54,6 +58,10 @@ const DEFAULT_ICON_SETTINGS = {
 const DEFAULT_GENERAL_SETTINGS = {
   hideSettingsTrigger: false
 }
+const DEFAULT_FOLDER_SETTINGS = {
+  selectedFolderIds: [] as string[],
+  hideFolderNames: false
+}
 const DEFAULT_TIME_SETTINGS = {
   enabled: true,
   showSeconds: false,
@@ -79,12 +87,23 @@ const SUPPORTED_DATE_FORMATS = new Set([
   'month-day-weekday'
 ])
 
+type NewTabFolderSettings = typeof DEFAULT_FOLDER_SETTINGS
+
+interface NewTabFolderSection {
+  id: string
+  title: string
+  path: string
+  node: chrome.bookmarks.BookmarkTreeNode
+  bookmarks: chrome.bookmarks.BookmarkTreeNode[]
+}
+
 const state = {
   loading: true,
   creatingFolder: false,
   error: '',
   rootNode: null as chrome.bookmarks.BookmarkTreeNode | null,
   folderNode: null as chrome.bookmarks.BookmarkTreeNode | null,
+  folderSections: [] as NewTabFolderSection[],
   bookmarks: [] as chrome.bookmarks.BookmarkTreeNode[],
   activeMenuBookmarkId: '',
   menuX: 0,
@@ -113,13 +132,26 @@ const state = {
   dragClientY: 0,
   dragOffsetX: 0,
   dragOffsetY: 0,
+  draggingBookmarkFolderId: '',
   dragOriginalOrderIds: [] as string[],
   dragSuppressClick: false,
+  draggingFolderId: '',
+  folderDragPointerId: 0,
+  folderDragLongPressTimer: 0,
+  folderDragClientX: 0,
+  folderDragClientY: 0,
+  folderDragOffsetX: 0,
+  folderDragOffsetY: 0,
+  folderDragOriginalOrderIds: [] as string[],
+  folderDragSuppressClick: false,
   reorderingBookmarks: false,
   backgroundSettings: { ...DEFAULT_BACKGROUND_SETTINGS },
   searchSettings: { ...DEFAULT_SEARCH_SETTINGS },
   iconSettings: { ...DEFAULT_ICON_SETTINGS },
   generalSettings: { ...DEFAULT_GENERAL_SETTINGS },
+  folderSettings: { ...DEFAULT_FOLDER_SETTINGS } as NewTabFolderSettings,
+  folderCandidatesExpanded: false,
+  folderCandidateQuery: '',
   timeSettings: { ...DEFAULT_TIME_SETTINGS },
   faviconRefreshTokens: new Map<string, number>()
 }
@@ -135,6 +167,8 @@ let activeBackgroundObjectUrl = ''
 let lastAppliedBackgroundMediaSignature = ''
 let bookmarkDragGhost: HTMLElement | null = null
 let bookmarkDragGhostFrame = 0
+let folderDragGhost: HTMLElement | null = null
+let folderDragGhostFrame = 0
 
 document.addEventListener('DOMContentLoaded', () => {
   bindEvents()
@@ -144,6 +178,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function bindEvents(): void {
   bindGeneralSettingsEvents()
+  bindFolderSettingsEvents()
   bindBackgroundSettingsEvents()
   bindSearchSettingsEvents()
   bindIconSettingsEvents()
@@ -157,6 +192,7 @@ function bindEvents(): void {
       closeSettingsDrawer()
       closeBookmarkMenu()
       closeAddBookmarkMenu()
+      cancelFolderDrag()
     }
   })
   document.addEventListener('pointerdown', (event) => {
@@ -180,6 +216,7 @@ function bindEvents(): void {
     closeBookmarkMenu()
     closeAddBookmarkMenu()
     cancelBookmarkDrag()
+    cancelFolderDrag()
   })
 
   root?.addEventListener('click', (event) => {
@@ -188,7 +225,10 @@ function bindEvents(): void {
       return
     }
 
-    if (state.dragSuppressClick && target.closest('[data-bookmark-id]')) {
+    if (
+      (state.dragSuppressClick && target.closest('[data-bookmark-id]')) ||
+      (state.folderDragSuppressClick && target.closest('[data-folder-drag-handle]'))
+    ) {
       event.preventDefault()
       event.stopPropagation()
       return
@@ -199,13 +239,17 @@ function bindEvents(): void {
       void createNewTabFolder()
     }
   })
+  root?.addEventListener('pointerdown', handleFolderPointerDown)
   root?.addEventListener('pointerdown', handleBookmarkPointerDown)
   window.addEventListener('pointermove', handleBookmarkPointerMove)
+  window.addEventListener('pointermove', handleFolderPointerMove)
   window.addEventListener('pointerup', (event) => {
     void finishBookmarkDrag(event)
+    void finishFolderDrag(event)
   })
   window.addEventListener('pointercancel', () => {
     cancelBookmarkDrag()
+    cancelFolderDrag()
   })
   root?.addEventListener('contextmenu', (event) => {
     const target = event.target
@@ -213,7 +257,12 @@ function bindEvents(): void {
       return
     }
 
-    if (state.draggingBookmarkId || state.dragSuppressClick) {
+    if (
+      state.draggingBookmarkId ||
+      state.dragSuppressClick ||
+      state.draggingFolderId ||
+      state.folderDragSuppressClick
+    ) {
       event.preventDefault()
       return
     }
@@ -334,11 +383,137 @@ function bindGeneralSettingsEvents(): void {
     ?.addEventListener('change', handleGeneralSettingsChange)
 }
 
+function bindFolderSettingsEvents(): void {
+  document
+    .getElementById('folder-hide-names')
+    ?.addEventListener('change', handleFolderSettingsChange)
+  document
+    .getElementById('folder-candidates-toggle')
+    ?.addEventListener('click', toggleFolderCandidates)
+  document
+    .getElementById('folder-candidate-search')
+    ?.addEventListener('input', handleFolderCandidateSearch)
+  document
+    .getElementById('folder-candidate-list')
+    ?.addEventListener('click', handleFolderCandidateClick)
+  document
+    .getElementById('folder-selected-list')
+    ?.addEventListener('click', handleSelectedFolderClick)
+}
+
 function handleGeneralSettingsChange(): void {
   state.generalSettings = readGeneralSettingsFromControls()
   void saveGeneralSettings()
   syncGeneralSettingsControls()
   applyGeneralSettings()
+}
+
+function handleFolderSettingsChange(): void {
+  state.folderSettings = readFolderSettingsFromControls()
+  void saveFolderSettings()
+  syncFolderSettingsControls()
+  applyFolderSettings()
+  render()
+  updateClockText()
+}
+
+function toggleFolderCandidates(): void {
+  state.folderCandidatesExpanded = !state.folderCandidatesExpanded
+  syncFolderSettingsControls()
+}
+
+function handleFolderCandidateSearch(event: Event): void {
+  const target = event.target
+  state.folderCandidateQuery = target instanceof HTMLInputElement ? target.value : ''
+  syncFolderSettingsControls()
+}
+
+function handleFolderCandidateClick(event: Event): void {
+  const target = event.target
+  if (!(target instanceof Element)) {
+    return
+  }
+
+  const button = target.closest('[data-folder-candidate-id]')
+  if (!(button instanceof HTMLElement)) {
+    return
+  }
+
+  const folderId = String(button.dataset.folderCandidateId || '').trim()
+  if (!folderId) {
+    return
+  }
+
+  void toggleSelectedFolder(folderId, { preserveCandidateScroll: true })
+}
+
+function handleSelectedFolderClick(event: Event): void {
+  const target = event.target
+  if (!(target instanceof Element)) {
+    return
+  }
+
+  const button = target.closest('[data-folder-remove-id]')
+  if (!(button instanceof HTMLElement)) {
+    return
+  }
+
+  const folderId = String(button.dataset.folderRemoveId || '').trim()
+  if (!folderId) {
+    return
+  }
+
+  void removeSelectedFolder(folderId)
+}
+
+async function toggleSelectedFolder(
+  folderId: string,
+  { preserveCandidateScroll = false } = {}
+): Promise<void> {
+  const currentIds = state.folderSettings.selectedFolderIds
+  const nextIds = currentIds.includes(folderId)
+    ? currentIds.filter((id) => id !== folderId)
+    : [...currentIds, folderId]
+  await updateSelectedFolders(nextIds, { preserveCandidateScroll })
+}
+
+async function removeSelectedFolder(folderId: string): Promise<void> {
+  await updateSelectedFolders(
+    state.folderSettings.selectedFolderIds.filter((id) => id !== folderId)
+  )
+}
+
+async function updateSelectedFolders(
+  folderIds: string[],
+  { preserveCandidateScroll = false } = {}
+): Promise<void> {
+  const candidateList = document.getElementById('folder-candidate-list')
+  const previousScrollTop = preserveCandidateScroll && candidateList instanceof HTMLElement
+    ? candidateList.scrollTop
+    : 0
+
+  state.folderSettings = normalizeFolderSettings({
+    ...state.folderSettings,
+    selectedFolderIds: folderIds
+  })
+  state.folderSections = buildNewTabFolderSections(state.rootNode, state.folderSettings)
+  state.folderNode = state.folderSections[0]?.node || null
+  state.bookmarks = getAllSectionBookmarks()
+
+  await saveFolderSettings()
+  render()
+  syncFolderSettingsControls()
+  applyFolderSettings()
+  updateClockText()
+
+  if (preserveCandidateScroll) {
+    window.requestAnimationFrame(() => {
+      const nextList = document.getElementById('folder-candidate-list')
+      if (nextList instanceof HTMLElement) {
+        nextList.scrollTop = previousScrollTop
+      }
+    })
+  }
 }
 
 function handleIconSettingsChange(): void {
@@ -476,6 +651,7 @@ function handleTimeSettingsChange(): void {
 
 function openSettingsDrawer(): void {
   syncGeneralSettingsControls()
+  syncFolderSettingsControls()
   syncBackgroundSettingsControls()
   syncSearchSettingsControls()
   syncIconSettingsControls()
@@ -543,6 +719,10 @@ function closeAddBookmarkMenu(): void {
 }
 
 function handleBookmarkPointerDown(event: PointerEvent): void {
+  if (state.draggingFolderId || state.folderDragLongPressTimer) {
+    return
+  }
+
   if (event.pointerType === 'mouse' && event.button !== 0) {
     return
   }
@@ -561,10 +741,15 @@ function handleBookmarkPointerDown(event: PointerEvent): void {
   if (!getBookmarkById(bookmarkId)) {
     return
   }
+  const folderId = String(bookmarkTarget.dataset.folderId || '').trim()
+  if (!folderId) {
+    return
+  }
 
   cancelBookmarkDrag({ keepSuppressClick: true })
   state.dragPointerId = event.pointerId
   state.draggingBookmarkId = bookmarkId
+  state.draggingBookmarkFolderId = folderId
   state.dragClientX = event.clientX
   state.dragClientY = event.clientY
   try {
@@ -586,7 +771,7 @@ function beginBookmarkDrag(): void {
   closeBookmarkMenu()
   closeAddBookmarkMenu()
   state.dragLongPressTimer = 0
-  state.dragOriginalOrderIds = state.bookmarks.map((bookmark) => String(bookmark.id))
+  state.dragOriginalOrderIds = getActiveBookmarkFolderBookmarks().map((bookmark) => String(bookmark.id))
   state.dragSuppressClick = true
   document.body.classList.add('bookmark-dragging')
   const sourceTile = getActiveDragTile()
@@ -628,7 +813,8 @@ async function finishBookmarkDrag(event: PointerEvent): Promise<void> {
   state.dragLongPressTimer = 0
 
   const wasDragging = Boolean(state.dragOriginalOrderIds.length)
-  const finalOrderIds = state.bookmarks.map((bookmark) => String(bookmark.id))
+  const folderId = state.draggingBookmarkFolderId
+  const finalOrderIds = getActiveBookmarkFolderBookmarks().map((bookmark) => String(bookmark.id))
   const originalOrderIds = [...state.dragOriginalOrderIds]
   clearBookmarkDragState({ keepSuppressClick: wasDragging })
 
@@ -643,7 +829,7 @@ async function finishBookmarkDrag(event: PointerEvent): Promise<void> {
     return
   }
 
-  await persistBookmarkOrder(finalOrderIds)
+  await persistBookmarkOrder(folderId, finalOrderIds)
 }
 
 function cancelBookmarkDrag({ keepSuppressClick = false } = {}): void {
@@ -666,6 +852,7 @@ function clearBookmarkDragState({ keepSuppressClick = false } = {}): void {
   state.dragClientY = 0
   state.dragOffsetX = 0
   state.dragOffsetY = 0
+  state.draggingBookmarkFolderId = ''
   state.dragOriginalOrderIds = []
   removeBookmarkDragGhost()
   document.body.classList.remove('bookmark-dragging')
@@ -701,6 +888,7 @@ function createBookmarkDragGhost(sourceTile = getActiveDragTile()): void {
   ghost.classList.add('bookmark-drag-ghost')
   ghost.removeAttribute('href')
   ghost.removeAttribute('data-bookmark-id')
+  ghost.removeAttribute('data-folder-id')
   ghost.setAttribute('aria-hidden', 'true')
   ghost.style.width = `${rect.width}px`
   ghost.style.height = `${rect.height}px`
@@ -750,6 +938,28 @@ function removeBookmarkDragGhost(): void {
   bookmarkDragGhostFrame = 0
   bookmarkDragGhost?.remove()
   bookmarkDragGhost = null
+}
+
+function getActiveBookmarkFolderSection(): NewTabFolderSection | null {
+  if (!state.draggingBookmarkFolderId) {
+    return null
+  }
+
+  return state.folderSections.find((section) => section.id === state.draggingBookmarkFolderId) || null
+}
+
+function getActiveBookmarkFolderBookmarks(): chrome.bookmarks.BookmarkTreeNode[] {
+  return getActiveBookmarkFolderSection()?.bookmarks || []
+}
+
+function setActiveBookmarkFolderBookmarks(bookmarks: chrome.bookmarks.BookmarkTreeNode[]): void {
+  const section = getActiveBookmarkFolderSection()
+  if (!section) {
+    return
+  }
+
+  section.bookmarks = bookmarks
+  state.bookmarks = getAllSectionBookmarks()
 }
 
 function getBookmarkTileRects(): Map<string, DOMRect> {
@@ -804,7 +1014,14 @@ function renderWithBookmarkFlip(): void {
 }
 
 function getBookmarkInsertIndex(clientX: number, clientY: number): number {
-  const tiles = Array.from(document.querySelectorAll<HTMLElement>('.bookmark-tile[data-bookmark-id]'))
+  const folderId = state.draggingBookmarkFolderId
+  if (!folderId) {
+    return -1
+  }
+
+  const tiles = Array.from(document.querySelectorAll<HTMLElement>(
+    `.bookmark-tile[data-bookmark-id][data-folder-id="${CSS.escape(folderId)}"]`
+  ))
   if (!tiles.length) {
     return -1
   }
@@ -827,7 +1044,8 @@ function getBookmarkInsertIndex(clientX: number, clientY: number): number {
   }
 
   const bookmarkId = String(closestTile.dataset.bookmarkId || '')
-  const targetIndex = state.bookmarks.findIndex((bookmark) => String(bookmark.id) === bookmarkId)
+  const targetIndex = getActiveBookmarkFolderBookmarks()
+    .findIndex((bookmark) => String(bookmark.id) === bookmarkId)
   if (targetIndex < 0) {
     return -1
   }
@@ -840,14 +1058,15 @@ function getBookmarkInsertIndex(clientX: number, clientY: number): number {
 }
 
 function moveDraggedBookmarkInState(insertIndex: number): boolean {
-  const currentIndex = state.bookmarks.findIndex(
+  const currentBookmarks = getActiveBookmarkFolderBookmarks()
+  const currentIndex = currentBookmarks.findIndex(
     (bookmark) => String(bookmark.id) === state.draggingBookmarkId
   )
   if (currentIndex < 0) {
     return false
   }
 
-  const nextBookmarks = [...state.bookmarks]
+  const nextBookmarks = [...currentBookmarks]
   const [draggedBookmark] = nextBookmarks.splice(currentIndex, 1)
   const normalizedIndex = Math.max(
     0,
@@ -862,12 +1081,11 @@ function moveDraggedBookmarkInState(insertIndex: number): boolean {
   }
 
   nextBookmarks.splice(normalizedIndex, 0, draggedBookmark)
-  state.bookmarks = nextBookmarks
+  setActiveBookmarkFolderBookmarks(nextBookmarks)
   return true
 }
 
-async function persistBookmarkOrder(bookmarkIds: string[]): Promise<void> {
-  const folderId = state.folderNode?.id
+async function persistBookmarkOrder(folderId: string, bookmarkIds: string[]): Promise<void> {
   if (!folderId) {
     return
   }
@@ -884,6 +1102,330 @@ async function persistBookmarkOrder(bookmarkIds: string[]): Promise<void> {
   } finally {
     state.reorderingBookmarks = false
   }
+}
+
+function handleFolderPointerDown(event: PointerEvent): void {
+  if (state.draggingBookmarkId || state.dragLongPressTimer) {
+    return
+  }
+
+  if (event.pointerType === 'mouse' && event.button !== 0) {
+    return
+  }
+
+  const target = event.target
+  if (!(target instanceof Element) || target.closest('.bookmark-edit-menu')) {
+    return
+  }
+
+  const folderTarget = target.closest('[data-folder-drag-handle]')
+  if (!(folderTarget instanceof HTMLElement)) {
+    return
+  }
+
+  const folderId = String(folderTarget.dataset.folderDragHandle || '').trim()
+  if (!folderId || !state.folderSections.some((section) => section.id === folderId)) {
+    return
+  }
+
+  cancelFolderDrag({ keepSuppressClick: true })
+  state.folderDragPointerId = event.pointerId
+  state.draggingFolderId = folderId
+  state.folderDragClientX = event.clientX
+  state.folderDragClientY = event.clientY
+  try {
+    folderTarget.setPointerCapture(event.pointerId)
+  } catch {
+    // Pointer capture can fail if the browser has already released this pointer.
+  }
+  state.folderDragLongPressTimer = window.setTimeout(() => {
+    beginFolderDrag()
+  }, FOLDER_DRAG_LONG_PRESS_MS)
+}
+
+function beginFolderDrag(): void {
+  if (!state.draggingFolderId || !state.folderSections.some((section) => section.id === state.draggingFolderId)) {
+    cancelFolderDrag()
+    return
+  }
+
+  closeBookmarkMenu()
+  closeAddBookmarkMenu()
+  state.folderDragLongPressTimer = 0
+  state.folderDragOriginalOrderIds = state.folderSections.map((section) => section.id)
+  state.folderDragSuppressClick = true
+  document.body.classList.add('folder-order-dragging')
+  const sourceHeader = getActiveFolderDragHeader()
+  createFolderDragGhost(sourceHeader)
+  sourceHeader?.classList.add('dragging')
+}
+
+function handleFolderPointerMove(event: PointerEvent): void {
+  if (!state.draggingFolderId || event.pointerId !== state.folderDragPointerId) {
+    return
+  }
+
+  state.folderDragClientX = event.clientX
+  state.folderDragClientY = event.clientY
+
+  if (state.folderDragLongPressTimer) {
+    return
+  }
+
+  event.preventDefault()
+  updateFolderDragGhost()
+  const insertIndex = getFolderInsertIndex(event.clientY)
+  if (insertIndex < 0) {
+    return
+  }
+
+  if (moveDraggedFolderInState(insertIndex)) {
+    renderWithFolderFlip()
+    updateFolderDragGhost({ immediate: true })
+  }
+}
+
+async function finishFolderDrag(event: PointerEvent): Promise<void> {
+  if (!state.draggingFolderId || event.pointerId !== state.folderDragPointerId) {
+    return
+  }
+
+  window.clearTimeout(state.folderDragLongPressTimer)
+  state.folderDragLongPressTimer = 0
+
+  const wasDragging = Boolean(state.folderDragOriginalOrderIds.length)
+  const finalOrderIds = state.folderSections.map((section) => section.id)
+  const originalOrderIds = [...state.folderDragOriginalOrderIds]
+  clearFolderDragState({ keepSuppressClick: wasDragging })
+
+  if (!wasDragging) {
+    return
+  }
+
+  render()
+  updateClockText()
+
+  if (areStringArraysEqual(originalOrderIds, finalOrderIds)) {
+    return
+  }
+
+  state.folderSettings = normalizeFolderSettings({
+    ...state.folderSettings,
+    selectedFolderIds: finalOrderIds
+  })
+  await saveFolderSettings()
+  syncFolderSettingsControls()
+}
+
+function cancelFolderDrag({ keepSuppressClick = false } = {}): void {
+  if (!state.draggingFolderId && !state.folderDragLongPressTimer) {
+    return
+  }
+
+  window.clearTimeout(state.folderDragLongPressTimer)
+  clearFolderDragState({ keepSuppressClick })
+  render()
+  updateClockText()
+}
+
+function clearFolderDragState({ keepSuppressClick = false } = {}): void {
+  getActiveFolderDragHeader()?.classList.remove('dragging')
+  state.draggingFolderId = ''
+  state.folderDragPointerId = 0
+  state.folderDragLongPressTimer = 0
+  state.folderDragClientX = 0
+  state.folderDragClientY = 0
+  state.folderDragOffsetX = 0
+  state.folderDragOffsetY = 0
+  state.folderDragOriginalOrderIds = []
+  removeFolderDragGhost()
+  document.body.classList.remove('folder-order-dragging')
+
+  if (keepSuppressClick) {
+    state.folderDragSuppressClick = true
+    window.setTimeout(() => {
+      state.folderDragSuppressClick = false
+    }, 250)
+  } else {
+    state.folderDragSuppressClick = false
+  }
+}
+
+function createFolderDragGhost(sourceHeader = getActiveFolderDragHeader()): void {
+  removeFolderDragGhost()
+
+  if (!sourceHeader) {
+    return
+  }
+
+  const rect = sourceHeader.getBoundingClientRect()
+  state.folderDragOffsetX = rect.width / 2
+  state.folderDragOffsetY = rect.height / 2
+
+  const ghost = sourceHeader.cloneNode(true) as HTMLElement
+  ghost.classList.remove('dragging')
+  ghost.classList.add('folder-drag-ghost')
+  ghost.removeAttribute('data-folder-drag-handle')
+  ghost.setAttribute('aria-hidden', 'true')
+  ghost.style.width = `${rect.width}px`
+  ghost.style.height = `${rect.height}px`
+  folderDragGhost = ghost
+  document.body.appendChild(ghost)
+  updateFolderDragGhost({ immediate: true })
+}
+
+function getActiveFolderDragHeader(): HTMLElement | null {
+  if (!state.draggingFolderId) {
+    return null
+  }
+
+  return document.querySelector<HTMLElement>(
+    `.folder-section-header[data-folder-drag-handle="${CSS.escape(state.draggingFolderId)}"]`
+  )
+}
+
+function updateFolderDragGhost({ immediate = false } = {}): void {
+  if (immediate) {
+    updateFolderDragGhostPosition()
+    return
+  }
+
+  if (folderDragGhostFrame) {
+    return
+  }
+
+  folderDragGhostFrame = window.requestAnimationFrame(() => {
+    folderDragGhostFrame = 0
+    updateFolderDragGhostPosition()
+  })
+}
+
+function updateFolderDragGhostPosition(): void {
+  if (!folderDragGhost) {
+    return
+  }
+
+  const left = state.folderDragClientX - state.folderDragOffsetX
+  const top = state.folderDragClientY - state.folderDragOffsetY
+  folderDragGhost.style.transform = `translate3d(${left}px, ${top}px, 0)`
+}
+
+function removeFolderDragGhost(): void {
+  window.cancelAnimationFrame(folderDragGhostFrame)
+  folderDragGhostFrame = 0
+  folderDragGhost?.remove()
+  folderDragGhost = null
+}
+
+function getFolderSectionRects(): Map<string, DOMRect> {
+  const rects = new Map<string, DOMRect>()
+  for (const section of document.querySelectorAll<HTMLElement>('.bookmark-folder-section[data-folder-section-id]')) {
+    const folderId = String(section.dataset.folderSectionId || '')
+    if (folderId) {
+      rects.set(folderId, section.getBoundingClientRect())
+    }
+  }
+  return rects
+}
+
+function renderWithFolderFlip(): void {
+  const previousRects = getFolderSectionRects()
+  render()
+  updateClockText()
+
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    return
+  }
+
+  for (const section of document.querySelectorAll<HTMLElement>('.bookmark-folder-section[data-folder-section-id]')) {
+    const folderId = String(section.dataset.folderSectionId || '')
+    if (!folderId || folderId === state.draggingFolderId) {
+      continue
+    }
+
+    const previousRect = previousRects.get(folderId)
+    if (!previousRect) {
+      continue
+    }
+
+    const currentRect = section.getBoundingClientRect()
+    const deltaY = previousRect.top - currentRect.top
+    if (Math.abs(deltaY) < 0.5) {
+      continue
+    }
+
+    section.animate(
+      [
+        { transform: `translate3d(0, ${deltaY}px, 0)` },
+        { transform: 'translate3d(0, 0, 0)' }
+      ],
+      {
+        duration: 180,
+        easing: 'cubic-bezier(0.22, 0.72, 0.18, 1)'
+      }
+    )
+  }
+}
+
+function getFolderInsertIndex(clientY: number): number {
+  const sections = Array.from(document.querySelectorAll<HTMLElement>('.bookmark-folder-section[data-folder-section-id]'))
+  if (!sections.length) {
+    return -1
+  }
+
+  let closestSection: HTMLElement | null = null
+  let closestDistance = Number.POSITIVE_INFINITY
+  for (const section of sections) {
+    const rect = section.getBoundingClientRect()
+    const centerY = rect.top + rect.height / 2
+    const distance = Math.abs(clientY - centerY)
+    if (distance < closestDistance) {
+      closestDistance = distance
+      closestSection = section
+    }
+  }
+
+  if (!closestSection) {
+    return -1
+  }
+
+  const folderId = String(closestSection.dataset.folderSectionId || '')
+  const targetIndex = state.folderSections.findIndex((section) => section.id === folderId)
+  if (targetIndex < 0) {
+    return -1
+  }
+
+  const rect = closestSection.getBoundingClientRect()
+  return targetIndex + (clientY > rect.top + rect.height / 2 ? 1 : 0)
+}
+
+function moveDraggedFolderInState(insertIndex: number): boolean {
+  const currentIndex = state.folderSections.findIndex(
+    (section) => section.id === state.draggingFolderId
+  )
+  if (currentIndex < 0) {
+    return false
+  }
+
+  const nextSections = [...state.folderSections]
+  const [draggedSection] = nextSections.splice(currentIndex, 1)
+  const normalizedIndex = Math.max(
+    0,
+    Math.min(
+      currentIndex < insertIndex ? insertIndex - 1 : insertIndex,
+      nextSections.length
+    )
+  )
+
+  if (currentIndex === normalizedIndex) {
+    return false
+  }
+
+  nextSections.splice(normalizedIndex, 0, draggedSection)
+  state.folderSections = nextSections
+  state.folderNode = state.folderSections[0]?.node || null
+  state.bookmarks = getAllSectionBookmarks()
+  return true
 }
 
 function areStringArraysEqual(left: string[], right: string[]): boolean {
@@ -947,7 +1489,7 @@ async function deleteActiveMenuBookmark(): Promise<void> {
       url: bookmark.url,
       parentId: String(bookmark.parentId || ''),
       index: Number.isFinite(Number(bookmark.index)) ? Number(bookmark.index) : 0,
-      path: NEW_TAB_FOLDER_TITLE,
+      path: getBookmarkFolderPath(bookmark) || DEFAULT_NEW_TAB_FOLDER_TITLE,
       source: '新标签页删除',
       deletedAt: Date.now()
     })
@@ -1023,15 +1565,22 @@ async function refreshNewTab(): Promise<void> {
         STORAGE_KEYS.newTabSearchSettings,
         STORAGE_KEYS.newTabIconSettings,
         STORAGE_KEYS.newTabGeneralSettings,
+        STORAGE_KEYS.newTabFolderSettings,
         STORAGE_KEYS.newTabTimeSettings
       ])
     ])
     const rootNode = tree[0] || null
-    const folderNode = findNewTabFolder(rootNode)
+    const folderSettings = normalizeFolderSettingsWithDefault(
+      stored[STORAGE_KEYS.newTabFolderSettings],
+      rootNode
+    )
+    const folderSections = buildNewTabFolderSections(rootNode, folderSettings)
 
     state.rootNode = rootNode
-    state.folderNode = folderNode
-    state.bookmarks = getDirectBookmarks(folderNode)
+    state.folderSettings = folderSettings
+    state.folderSections = folderSections
+    state.folderNode = folderSections[0]?.node || null
+    state.bookmarks = getAllSectionBookmarks()
     state.customIcons = normalizeCustomIcons(stored[STORAGE_KEYS.newTabCustomIcons])
     state.backgroundSettings = normalizeBackgroundSettings(stored[STORAGE_KEYS.newTabBackgroundSettings])
     state.searchSettings = normalizeSearchSettings(stored[STORAGE_KEYS.newTabSearchSettings])
@@ -1049,6 +1598,8 @@ async function refreshNewTab(): Promise<void> {
     syncIconSettingsControls()
     syncGeneralSettingsControls()
     applyGeneralSettings()
+    syncFolderSettingsControls()
+    applyFolderSettings()
     syncTimeSettingsControls()
     updateAllSettingRangeVisuals()
     updateClockText()
@@ -1078,13 +1629,18 @@ async function createNewTabFolder(): Promise<void> {
   try {
     const rootNode = state.rootNode || (await getBookmarkTree())[0] || null
     const bookmarksBar = findBookmarksBar(rootNode)
-    await createBookmark({
+    const createdFolder = await createBookmark({
       parentId: bookmarksBar?.id || BOOKMARKS_BAR_ID,
-      title: NEW_TAB_FOLDER_TITLE
+      title: DEFAULT_NEW_TAB_FOLDER_TITLE
     })
+    state.folderSettings = normalizeFolderSettings({
+      ...state.folderSettings,
+      selectedFolderIds: [...state.folderSettings.selectedFolderIds, String(createdFolder.id)]
+    })
+    await saveFolderSettings()
     await refreshNewTab()
   } catch (error) {
-    state.error = error instanceof Error ? error.message : '标签页文件夹创建失败，请稍后重试。'
+    state.error = error instanceof Error ? error.message : '书签来源文件夹创建失败，请稍后重试。'
     render()
   } finally {
     state.creatingFolder = false
@@ -1093,23 +1649,38 @@ async function createNewTabFolder(): Promise<void> {
 }
 
 async function ensureNewTabFolder(): Promise<string> {
-  if (state.folderNode?.id) {
-    return String(state.folderNode.id)
+  const primarySection = state.folderSections[0]
+  if (primarySection?.id) {
+    return primarySection.id
   }
 
   const rootNode = state.rootNode || (await getBookmarkTree())[0] || null
   const existingFolder = findNewTabFolder(rootNode)
   if (existingFolder?.id) {
-    state.folderNode = existingFolder
+    state.folderSettings = normalizeFolderSettings({
+      ...state.folderSettings,
+      selectedFolderIds: [String(existingFolder.id)]
+    })
+    state.folderSections = buildNewTabFolderSections(rootNode, state.folderSettings)
+    state.folderNode = state.folderSections[0]?.node || existingFolder
+    state.bookmarks = getAllSectionBookmarks()
+    await saveFolderSettings()
     return String(existingFolder.id)
   }
 
   const bookmarksBar = findBookmarksBar(rootNode)
   const createdFolder = await createBookmark({
     parentId: bookmarksBar?.id || BOOKMARKS_BAR_ID,
-    title: NEW_TAB_FOLDER_TITLE
+    title: DEFAULT_NEW_TAB_FOLDER_TITLE
   })
-  state.folderNode = createdFolder
+  state.folderSettings = normalizeFolderSettings({
+    ...state.folderSettings,
+    selectedFolderIds: [String(createdFolder.id)]
+  })
+  state.folderSections = buildNewTabFolderSections(rootNode, state.folderSettings)
+  state.folderNode = state.folderSections[0]?.node || createdFolder
+  state.bookmarks = getAllSectionBookmarks()
+  await saveFolderSettings()
   return String(createdFolder.id)
 }
 
@@ -1132,17 +1703,12 @@ function render(): void {
     return
   }
 
-  if (!state.folderNode) {
+  if (!state.folderSections.length) {
     root.appendChild(createNewTabPage(createMissingFolderView()))
     return
   }
 
-  if (!state.bookmarks.length) {
-    root.appendChild(createNewTabPage(createStateView('“标签页”文件夹中还没有书签')))
-    return
-  }
-
-  root.appendChild(createNewTabPage(createBookmarkGrid(state.bookmarks)))
+  root.appendChild(createNewTabPage(createBookmarkSections(state.folderSections)))
 }
 
 function createNewTabPage(content: HTMLElement): HTMLElement {
@@ -1275,7 +1841,7 @@ function createMissingFolderView(): HTMLElement {
   button.type = 'button'
   button.dataset.createFolder = 'true'
   button.disabled = state.creatingFolder
-  button.textContent = state.creatingFolder ? '正在创建' : '新增标签页文件夹'
+  button.textContent = state.creatingFolder ? '正在创建' : '新增书签来源文件夹'
 
   view.appendChild(button)
   return view
@@ -1301,64 +1867,116 @@ function createStateView(message: string, actionLabel = '', action?: () => void)
   return view
 }
 
-function createBookmarkGrid(bookmarks: chrome.bookmarks.BookmarkTreeNode[]): HTMLElement {
+function createBookmarkSections(sections: NewTabFolderSection[]): HTMLElement {
   const view = document.createElement('section')
   view.className = 'newtab-content'
   view.style.setProperty('--icon-page-width', `${getIconPageWidthPx(state.iconSettings.pageWidth)}px`)
   view.style.setProperty('--icon-column-gap', `${getIconGapPx(state.iconSettings.columnGap)}px`)
   view.style.setProperty('--icon-row-gap', `${getIconGapPx(state.iconSettings.rowGap)}px`)
 
-  const list = document.createElement('nav')
-  list.className = 'bookmark-grid'
-  list.setAttribute('aria-label', '标签页书签')
+  const groupList = document.createElement('div')
+  groupList.className = 'bookmark-folder-sections'
 
-  for (const bookmark of bookmarks) {
-    const url = String(bookmark.url || '')
-    const title = String(bookmark.title || '').trim() || url
-    const item = document.createElement('a')
-    item.className = 'bookmark-tile'
-    item.href = url
-    item.title = title
-    item.draggable = false
-    item.dataset.bookmarkId = String(bookmark.id)
-    if (String(bookmark.id) === state.draggingBookmarkId && state.dragOriginalOrderIds.length) {
-      item.classList.add('dragging')
+  for (const section of sections) {
+    const sectionNode = document.createElement('section')
+    sectionNode.className = 'bookmark-folder-section'
+    sectionNode.dataset.folderSectionId = section.id
+    if (section.id === state.draggingFolderId && state.folderDragOriginalOrderIds.length) {
+      sectionNode.classList.add('dragging-folder')
     }
 
-    const iconShell = document.createElement('span')
-    iconShell.className = 'bookmark-icon-shell'
-    iconShell.setAttribute('aria-hidden', 'true')
-
-    const icon = document.createElement('img')
-    const customIcon = state.customIcons[String(bookmark.id)]
-    icon.className = 'bookmark-favicon'
-    if (customIcon) {
-      icon.classList.add('custom-icon')
+    const header = document.createElement('button')
+    header.className = 'folder-section-header'
+    header.type = 'button'
+    header.dataset.folderDragHandle = section.id
+    header.title = section.path || section.title
+    header.setAttribute('aria-label', `${section.title}，长按拖拽调整文件夹顺序`)
+    if (section.id === state.draggingFolderId && state.folderDragOriginalOrderIds.length) {
+      header.classList.add('dragging')
     }
-    icon.src = customIcon || getFaviconUrl(url, String(bookmark.id))
-    icon.alt = ''
-    icon.draggable = false
-    icon.loading = 'eager'
-    icon.decoding = 'async'
-    icon.addEventListener('error', () => {
-      iconShell.classList.add('favicon-missing')
-    })
 
-    const fallback = document.createElement('span')
-    fallback.className = 'bookmark-fallback'
-    fallback.textContent = getFallbackLabel(title)
+    const title = document.createElement('span')
+    title.className = 'folder-section-title'
+    title.textContent = section.title || '未命名文件夹'
 
-    const label = document.createElement('span')
-    label.className = 'bookmark-title'
-    label.textContent = title
+    const count = document.createElement('span')
+    count.className = 'folder-section-count'
+    count.textContent = String(section.bookmarks.length)
 
-    iconShell.append(icon, fallback)
-    item.append(iconShell, label)
-    list.appendChild(item)
+    header.append(title, count)
+    sectionNode.appendChild(header)
+
+    if (section.bookmarks.length) {
+      const list = document.createElement('nav')
+      list.className = 'bookmark-grid'
+      list.setAttribute('aria-label', `${section.title || '文件夹'}书签`)
+
+      for (const bookmark of section.bookmarks) {
+        list.appendChild(createBookmarkTile(bookmark, section.id))
+      }
+
+      sectionNode.appendChild(list)
+    } else {
+      const empty = document.createElement('p')
+      empty.className = 'bookmark-folder-empty'
+      empty.textContent = '此文件夹还没有书签'
+      sectionNode.appendChild(empty)
+    }
+
+    groupList.appendChild(sectionNode)
   }
 
-  view.appendChild(list)
+  view.appendChild(groupList)
   return view
+}
+
+function createBookmarkTile(
+  bookmark: chrome.bookmarks.BookmarkTreeNode,
+  folderId: string
+): HTMLAnchorElement {
+  const url = String(bookmark.url || '')
+  const title = String(bookmark.title || '').trim() || url
+  const item = document.createElement('a')
+  item.className = 'bookmark-tile'
+  item.href = url
+  item.title = title
+  item.draggable = false
+  item.dataset.bookmarkId = String(bookmark.id)
+  item.dataset.folderId = folderId
+  if (String(bookmark.id) === state.draggingBookmarkId && state.dragOriginalOrderIds.length) {
+    item.classList.add('dragging')
+  }
+
+  const iconShell = document.createElement('span')
+  iconShell.className = 'bookmark-icon-shell'
+  iconShell.setAttribute('aria-hidden', 'true')
+
+  const icon = document.createElement('img')
+  const customIcon = state.customIcons[String(bookmark.id)]
+  icon.className = 'bookmark-favicon'
+  if (customIcon) {
+    icon.classList.add('custom-icon')
+  }
+  icon.src = customIcon || getFaviconUrl(url, String(bookmark.id))
+  icon.alt = ''
+  icon.draggable = false
+  icon.loading = 'eager'
+  icon.decoding = 'async'
+  icon.addEventListener('error', () => {
+    iconShell.classList.add('favicon-missing')
+  })
+
+  const fallback = document.createElement('span')
+  fallback.className = 'bookmark-fallback'
+  fallback.textContent = getFallbackLabel(title)
+
+  const label = document.createElement('span')
+  label.className = 'bookmark-title'
+  label.textContent = title
+
+  iconShell.append(icon, fallback)
+  item.append(iconShell, label)
+  return item
 }
 
 function findNewTabFolder(
@@ -1375,7 +1993,7 @@ function findNewTabFolder(
     node: chrome.bookmarks.BookmarkTreeNode,
     ancestors: chrome.bookmarks.BookmarkTreeNode[] = []
   ): void {
-    if (!node.url && node.title === NEW_TAB_FOLDER_TITLE) {
+    if (!node.url && node.title === DEFAULT_NEW_TAB_FOLDER_TITLE) {
       candidates.push({
         node,
         depth: ancestors.length,
@@ -1408,14 +2026,62 @@ function findNewTabFolder(
   return candidates[0]?.node || null
 }
 
+function buildNewTabFolderSections(
+  rootNode: chrome.bookmarks.BookmarkTreeNode | null,
+  settings: NewTabFolderSettings
+): NewTabFolderSection[] {
+  if (!rootNode) {
+    return []
+  }
+
+  const folderData = extractBookmarkData(rootNode)
+  const selectedIds = normalizeFolderIds(settings.selectedFolderIds)
+  const sections: NewTabFolderSection[] = []
+
+  for (const folderId of selectedIds) {
+    const node = findNodeById(rootNode, folderId)
+    if (!node || node.url) {
+      continue
+    }
+
+    const folder = folderData.folderMap.get(folderId)
+    sections.push(createFolderSection(node, folder))
+  }
+
+  return sections
+}
+
+function createFolderSection(
+  node: chrome.bookmarks.BookmarkTreeNode,
+  folder?: FolderRecord
+): NewTabFolderSection {
+  const title = String(folder?.title || node.title || '未命名文件夹').trim() || '未命名文件夹'
+  return {
+    id: String(node.id),
+    title,
+    path: String(folder?.path || title),
+    node,
+    bookmarks: getDirectBookmarks(node)
+  }
+}
+
 function getDirectBookmarks(
   folderNode: chrome.bookmarks.BookmarkTreeNode | null
 ): chrome.bookmarks.BookmarkTreeNode[] {
   return (folderNode?.children || []).filter((child) => Boolean(child.url))
 }
 
+function getAllSectionBookmarks(): chrome.bookmarks.BookmarkTreeNode[] {
+  return state.folderSections.flatMap((section) => section.bookmarks)
+}
+
 function getBookmarkById(bookmarkId: string): chrome.bookmarks.BookmarkTreeNode | null {
   return state.bookmarks.find((bookmark) => String(bookmark.id) === String(bookmarkId)) || null
+}
+
+function getBookmarkFolderPath(bookmark: chrome.bookmarks.BookmarkTreeNode): string {
+  const parentId = String(bookmark.parentId || '')
+  return state.folderSections.find((section) => section.id === parentId)?.path || ''
 }
 
 function getActiveMenuBookmark(): chrome.bookmarks.BookmarkTreeNode | null {
@@ -1504,7 +2170,7 @@ function renderAddBookmarkMenu({ focusFirst = true } = {}): void {
   const menu = document.createElement('section')
   menu.className = `bookmark-add-menu ${state.addMenuExpanded ? 'expanded' : ''}`
   menu.setAttribute('role', 'dialog')
-  menu.setAttribute('aria-label', '添加标签页书签')
+  menu.setAttribute('aria-label', '添加新标签页书签')
   menu.style.left = `${state.addMenuX}px`
   menu.style.top = `${state.addMenuY}px`
 
@@ -1512,7 +2178,7 @@ function renderAddBookmarkMenu({ focusFirst = true } = {}): void {
     const addButton = document.createElement('button')
     addButton.className = 'bookmark-add-trigger'
     addButton.type = 'button'
-    addButton.append(createMenuActionIcon('plus'), document.createTextNode('添加标签页书签'))
+    addButton.append(createMenuActionIcon('plus'), document.createTextNode('添加书签'))
     addButton.addEventListener('click', expandAddBookmarkMenu)
     menu.appendChild(addButton)
   } else {
@@ -2542,6 +3208,233 @@ function applyGeneralSettings(): void {
   )
 }
 
+function normalizeFolderSettings(rawSettings: unknown): NewTabFolderSettings {
+  if (!rawSettings || typeof rawSettings !== 'object' || Array.isArray(rawSettings)) {
+    return { ...DEFAULT_FOLDER_SETTINGS }
+  }
+
+  const settings = rawSettings as Record<string, unknown>
+  return {
+    selectedFolderIds: normalizeFolderIds(settings.selectedFolderIds),
+    hideFolderNames: settings.hideFolderNames === true
+  }
+}
+
+function normalizeFolderSettingsWithDefault(
+  rawSettings: unknown,
+  rootNode: chrome.bookmarks.BookmarkTreeNode | null
+): NewTabFolderSettings {
+  const settings = normalizeFolderSettings(rawSettings)
+  if (settings.selectedFolderIds.length) {
+    return settings
+  }
+
+  const defaultFolder = findNewTabFolder(rootNode)
+  if (!defaultFolder?.id) {
+    return settings
+  }
+
+  return {
+    ...settings,
+    selectedFolderIds: [String(defaultFolder.id)]
+  }
+}
+
+function normalizeFolderIds(value: unknown): string[] {
+  const source = Array.isArray(value) ? value : []
+  const seen = new Set<string>()
+  const ids: string[] = []
+  for (const item of source) {
+    const id = String(item || '').trim()
+    if (!id || seen.has(id)) {
+      continue
+    }
+    seen.add(id)
+    ids.push(id)
+  }
+  return ids.slice(0, 24)
+}
+
+function readFolderSettingsFromControls(): NewTabFolderSettings {
+  const hideInput = document.getElementById('folder-hide-names')
+
+  return normalizeFolderSettings({
+    selectedFolderIds: state.folderSettings.selectedFolderIds,
+    hideFolderNames: hideInput instanceof HTMLInputElement
+      ? hideInput.checked
+      : state.folderSettings.hideFolderNames
+  })
+}
+
+function syncFolderSettingsControls(): void {
+  const hideInput = document.getElementById('folder-hide-names')
+  const selectedList = document.getElementById('folder-selected-list')
+  const selectedCount = document.getElementById('folder-selected-count')
+  const toggle = document.getElementById('folder-candidates-toggle')
+  const panel = document.getElementById('folder-candidates-panel')
+  const searchInput = document.getElementById('folder-candidate-search')
+  const candidateList = document.getElementById('folder-candidate-list')
+
+  if (hideInput instanceof HTMLInputElement) {
+    hideInput.checked = state.folderSettings.hideFolderNames
+  }
+
+  if (selectedCount) {
+    selectedCount.textContent = String(state.folderSettings.selectedFolderIds.length)
+  }
+
+  if (selectedList instanceof HTMLElement) {
+    selectedList.replaceChildren(...createSelectedFolderControls())
+  }
+
+  if (toggle instanceof HTMLButtonElement) {
+    toggle.setAttribute('aria-expanded', String(state.folderCandidatesExpanded))
+    toggle.classList.toggle('expanded', state.folderCandidatesExpanded)
+    const label = toggle.querySelector('[data-folder-toggle-label]')
+    if (label) {
+      label.textContent = state.folderCandidatesExpanded ? '收起候选文件夹' : '展开候选文件夹'
+    }
+  }
+
+  if (panel instanceof HTMLElement) {
+    panel.hidden = !state.folderCandidatesExpanded
+  }
+
+  if (searchInput instanceof HTMLInputElement && searchInput.value !== state.folderCandidateQuery) {
+    searchInput.value = state.folderCandidateQuery
+  }
+
+  if (candidateList instanceof HTMLElement) {
+    candidateList.replaceChildren(...createFolderCandidateControls())
+  }
+}
+
+function createSelectedFolderControls(): HTMLElement[] {
+  const selectedIds = state.folderSettings.selectedFolderIds
+  if (!selectedIds.length) {
+    const empty = document.createElement('p')
+    empty.className = 'folder-source-empty'
+    empty.textContent = '未选择文件夹'
+    return [empty]
+  }
+
+  const folders = getFolderCandidateMap()
+  return selectedIds.map((folderId) => {
+    const folder = folders.get(folderId)
+    const row = document.createElement('div')
+    row.className = 'folder-source-selected-item'
+
+    const copy = document.createElement('span')
+    copy.className = 'folder-source-selected-copy'
+
+    const title = document.createElement('strong')
+    title.textContent = folder?.title || '已删除的文件夹'
+
+    const path = document.createElement('span')
+    path.textContent = folder?.path || folderId
+
+    copy.append(title, path)
+
+    const remove = document.createElement('button')
+    remove.className = 'folder-source-remove'
+    remove.type = 'button'
+    remove.dataset.folderRemoveId = folderId
+    remove.setAttribute('aria-label', `移除 ${folder?.title || '文件夹'}`)
+    remove.textContent = '×'
+
+    row.append(copy, remove)
+    return row
+  })
+}
+
+function createFolderCandidateControls(): HTMLElement[] {
+  const candidates = getFilteredFolderCandidates()
+  if (!candidates.length) {
+    const empty = document.createElement('p')
+    empty.className = 'folder-source-empty'
+    empty.textContent = '没有匹配的文件夹'
+    return [empty]
+  }
+
+  const selectedIds = new Set(state.folderSettings.selectedFolderIds)
+  return candidates.map((folder) => {
+    const selected = selectedIds.has(folder.id)
+    const button = document.createElement('button')
+    button.className = `folder-candidate-card ${selected ? 'selected' : ''}`
+    button.type = 'button'
+    button.dataset.folderCandidateId = folder.id
+    button.title = folder.path || folder.title
+    button.setAttribute('role', 'option')
+    button.setAttribute('aria-selected', String(selected))
+
+    const copy = document.createElement('span')
+    copy.className = 'folder-candidate-copy'
+
+    const title = document.createElement('strong')
+    title.textContent = folder.title || '未命名文件夹'
+
+    const path = document.createElement('span')
+    path.textContent = folder.path || folder.title || '未命名文件夹'
+
+    copy.append(title, path)
+
+    const badge = document.createElement('span')
+    badge.className = 'folder-candidate-badge'
+    badge.textContent = selected ? '已选' : `${folder.bookmarkCount}`
+
+    button.append(copy, badge)
+    return button
+  })
+}
+
+function getFilteredFolderCandidates(): FolderRecord[] {
+  const query = normalizeSettingSearchText(state.folderCandidateQuery)
+  return getFolderCandidates().filter((folder) => {
+    if (!query) {
+      return true
+    }
+
+    return folder.normalizedTitle.includes(query) || folder.normalizedPath.includes(query)
+  })
+}
+
+function getFolderCandidates(): FolderRecord[] {
+  if (!state.rootNode) {
+    return []
+  }
+
+  return extractBookmarkData(state.rootNode).folders
+}
+
+function getFolderCandidateMap(): Map<string, FolderRecord> {
+  const map = new Map<string, FolderRecord>()
+  for (const folder of getFolderCandidates()) {
+    map.set(folder.id, folder)
+  }
+  return map
+}
+
+function normalizeSettingSearchText(value: string): string {
+  return String(value || '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+async function saveFolderSettings(): Promise<void> {
+  await setLocalStorage({
+    [STORAGE_KEYS.newTabFolderSettings]: state.folderSettings
+  })
+}
+
+function applyFolderSettings(): void {
+  document.body.classList.toggle(
+    'folder-names-hidden',
+    state.folderSettings.hideFolderNames
+  )
+}
+
 function normalizeIconSettings(rawSettings: unknown): typeof DEFAULT_ICON_SETTINGS {
   if (!rawSettings || typeof rawSettings !== 'object' || Array.isArray(rawSettings)) {
     return { ...DEFAULT_ICON_SETTINGS }
@@ -2809,17 +3702,18 @@ function formatClockTime(date: Date): string {
 function formatClockDate(date: Date): string {
   const settings = state.timeSettings
   const parts = getClockParts(date)
-  const monthText = `${parts.month}月`
-  const dayText = `${parts.day}日`
+  const monthText = String(parts.month).padStart(2, '0')
+  const dayText = String(parts.day).padStart(2, '0')
+  const weekdayText = parts.weekday.replace(/^星期/, '周')
 
   switch (settings.dateFormat) {
     case 'weekday-day-month':
-      return `${parts.weekday} ${dayText} ${monthText}`
+      return `${weekdayText} ${dayText}/${monthText}`
     case 'weekday-month-day':
-      return `${parts.weekday}, ${monthText} ${dayText}`
+      return `${weekdayText} ${monthText}/${dayText}`
     case 'month-day-weekday':
     default:
-      return `${monthText} ${dayText} ${parts.weekday}`
+      return `${monthText}.${dayText} ${weekdayText}`
   }
 }
 

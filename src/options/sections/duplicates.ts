@@ -211,7 +211,16 @@ export async function deleteSelectedDuplicates(callbacks) {
   }
 
   const targetIds = [...managerState.selectedDuplicateIds]
-  if (!window.confirm(`确认删除这 ${targetIds.length} 条重复书签，并移入回收站？`)) {
+  const confirmed = callbacks.confirm
+    ? await callbacks.confirm({
+        title: `合并删除 ${targetIds.length} 条重复书签？`,
+        copy: '这些重复项会从 Chrome 书签中移除并进入回收站。未选中的保留项不会受影响。',
+        confirmLabel: '删除并移入回收站',
+        label: 'Delete',
+        tone: 'danger'
+      })
+    : true
+  if (!confirmed) {
     return
   }
 

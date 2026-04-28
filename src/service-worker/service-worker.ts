@@ -104,6 +104,7 @@ let bookmarkAddHistoryWriteQueue = Promise.resolve()
 let autoAnalyzeQueueWriteQueue: Promise<unknown> = Promise.resolve()
 let autoAnalyzeQueueProcessing = false
 let autoAnalyzeQueueTimer = 0
+const MAX_PENDING_NAVIGATION_CHECKS = 4
 const AUTO_CLASSIFY_SUPPRESS_MS = 10000
 const AUTO_CLASSIFY_DELAY_MS = 900
 const AUTO_CLASSIFY_FOLDER_LIMIT = 260
@@ -1690,6 +1691,10 @@ async function performNavigationCheck({
 }): Promise<NavigationCheckResult> {
   if (!/^https?:\/\//i.test(String(url || ''))) {
     throw new Error('仅支持检测 http/https 书签。')
+  }
+
+  if (pendingChecks.size >= MAX_PENDING_NAVIGATION_CHECKS) {
+    throw new Error('后台导航检测正忙，请稍后重试。')
   }
 
   const effectiveTimeout = normalizeTimeout(timeoutMs)

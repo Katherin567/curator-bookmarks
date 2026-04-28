@@ -400,8 +400,10 @@ a {
 .option-value {
   display: inline-flex;
   align-items: center;
+  min-width: 0;
   min-height: 36px;
   max-width: 100%;
+  overflow: hidden;
   padding: 0 14px;
   border-radius: 999px;
   border: 1px solid var(--surface-3);
@@ -409,6 +411,7 @@ a {
   color: var(--text-soft);
   font-size: 12px;
   font-weight: 600;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -551,6 +554,10 @@ a {
   color: #ffb7b0;
 }
 
+.options-section-label.warning {
+  color: #ffdca5;
+}
+
 .options-button {
   min-height: 42px;
   padding: 0 18px;
@@ -666,6 +673,10 @@ a {
   flex-wrap: wrap;
 }
 
+.detect-results-header > div {
+  min-width: 0;
+}
+
 .detect-permission-meta strong,
 .detect-progress-meta strong,
 .detect-results-header strong {
@@ -721,6 +732,7 @@ a {
 }
 
 .summary-card {
+  min-width: 0;
   padding: 18px 18px 16px;
   border-radius: 20px;
   border: 1px solid var(--line-soft);
@@ -783,6 +795,7 @@ a {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  min-width: 0;
 }
 
 .detect-result-actions {
@@ -790,6 +803,7 @@ a {
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
+  min-width: 0;
   flex-wrap: wrap;
 }
 
@@ -820,10 +834,12 @@ a {
 
 .detect-result-copy strong {
   display: block;
+  min-width: 0;
   color: var(--text);
   font-size: 15px;
   font-weight: 600;
   line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .detect-result-url,
@@ -833,7 +849,8 @@ a {
   color: var(--text-soft);
   font-size: 13px;
   line-height: 1.6;
-  word-break: break-all;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .detect-result-url {
@@ -865,6 +882,9 @@ a {
 .options-modal {
   width: 100%;
   max-width: 420px;
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  min-width: 0;
   padding: 24px 24px 22px;
   border-radius: 26px;
   border: 1px solid var(--line-soft);
@@ -879,6 +899,7 @@ a {
   font-weight: 650;
   letter-spacing: 0;
   line-height: 1.1;
+  overflow-wrap: anywhere;
 }
 
 .options-modal-copy {
@@ -886,12 +907,14 @@ a {
   color: var(--text-soft);
   font-size: 14px;
   line-height: 1.75;
+  overflow-wrap: anywhere;
 }
 
 .options-modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: 12px;
+  flex-wrap: wrap;
   margin-top: 22px;
 }
 
@@ -1369,6 +1392,15 @@ a {
   color: var(--text-dim);
 }
 
+.ai-feature-switch-copy code {
+  padding: 1px 5px;
+  border: 1px solid var(--surface-3);
+  border-radius: 5px;
+  background: var(--surface-1);
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
 .ai-inline-status {
   min-height: 24px;
   padding: 0 9px;
@@ -1800,6 +1832,7 @@ a {
   align-items: flex-start;
   gap: 6px;
   width: 100%;
+  min-width: 0;
   padding: 14px 16px;
   border: 1px solid var(--line-soft);
   border-radius: 18px;
@@ -1825,9 +1858,11 @@ a {
 }
 
 .move-folder-card span {
+  max-width: 100%;
   color: var(--text-soft);
   font-size: 13px;
   line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 
 .scope-folder-card {
@@ -1836,6 +1871,7 @@ a {
   align-items: flex-start;
   gap: 8px;
   width: 100%;
+  min-width: 0;
   padding: 15px 16px;
   border: 1px solid var(--line-soft);
   border-radius: 18px;
@@ -1869,11 +1905,13 @@ a {
   display: flex;
   align-items: center;
   gap: 10px;
+  max-width: 100%;
   min-width: 0;
 }
 
 .scope-folder-head strong {
   min-width: 0;
+  max-width: 100%;
   color: var(--text);
   font-size: 15px;
   font-weight: 600;
@@ -1881,10 +1919,12 @@ a {
 }
 
 .scope-folder-card span:last-child {
+  max-width: 100%;
   color: var(--text-soft);
   font-size: 13px;
   line-height: 1.55;
-  word-break: break-all;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .scope-folder-icon {
@@ -2454,6 +2494,7 @@ a {
 
 .ai-flow-step {
   position: relative;
+  min-width: 0;
   padding: 0 14px 0 0;
   border-radius: 0;
   background: transparent;
@@ -2481,12 +2522,16 @@ a {
 }
 
 .ai-flow-step strong {
+  display: block;
+  min-width: 0;
   color: rgba(245, 245, 247, 0.9);
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .ai-flow-step p {
   color: rgba(245, 245, 247, 0.42);
+  overflow-wrap: anywhere;
 }
 
 .ai-provider-input,
