@@ -167,18 +167,31 @@
         <section class="settings-section" aria-labelledby="settings-icon-title">
           <h2 id="settings-icon-title">图标</h2>
           <div class="settings-card">
-            <label class="setting-row slider-row">
-              <span>页面宽度</span>
-              <input id="icon-page-width" class="setting-range" type="range" min="16" max="100" value="64">
-            </label>
-            <label class="setting-row slider-row">
-              <span>横向间距</span>
-              <input id="icon-column-gap" class="setting-range" type="range" min="0" max="100" value="18">
-            </label>
-            <label class="setting-row slider-row">
-              <span>竖向间距</span>
-              <input id="icon-row-gap" class="setting-range" type="range" min="0" max="100" value="18">
-            </label>
+            <div id="icon-preset-row" class="icon-preset-row"></div>
+            <button
+              id="icon-advanced-toggle"
+              class="icon-advanced-toggle"
+              type="button"
+              aria-expanded="false"
+              aria-controls="icon-advanced-panel"
+            >
+              <span>高级调整</span>
+              <span class="icon-advanced-chevron" aria-hidden="true"></span>
+            </button>
+            <div id="icon-advanced-panel" class="icon-advanced-panel" hidden>
+              <label class="setting-row slider-row">
+                <span>页面宽度</span>
+                <input id="icon-page-width" class="setting-range" type="range" min="16" max="100" value="64">
+              </label>
+              <label class="setting-row slider-row">
+                <span>横向间距</span>
+                <input id="icon-column-gap" class="setting-range" type="range" min="0" max="100" value="18">
+              </label>
+              <label class="setting-row slider-row">
+                <span>竖向间距</span>
+                <input id="icon-row-gap" class="setting-range" type="range" min="0" max="100" value="18">
+              </label>
+            </div>
           </div>
         </section>
 

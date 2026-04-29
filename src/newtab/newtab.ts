@@ -50,10 +50,45 @@ const DEFAULT_SEARCH_SETTINGS = {
   background: 58
 }
 const SUPPORTED_SEARCH_ENGINES = new Set(['default', 'google', 'bing', 'baidu', 'duckduckgo'])
+const ICON_LAYOUT_PRESETS = {
+  compact: {
+    tileWidth: 72,
+    iconShellSize: 36,
+    pageWidth: 56,
+    columnGap: 6,
+    rowGap: 6
+  },
+  comfortable: {
+    tileWidth: 82,
+    iconShellSize: 44,
+    pageWidth: 64,
+    columnGap: 18,
+    rowGap: 18
+  },
+  spacious: {
+    tileWidth: 96,
+    iconShellSize: 52,
+    pageWidth: 76,
+    columnGap: 30,
+    rowGap: 30
+  }
+} as const
+
+type IconLayoutPresetKey = keyof typeof ICON_LAYOUT_PRESETS
+
+const ICON_PRESET_META: Record<IconLayoutPresetKey, { name: string; desc: string; cols: number; rows: number }> = {
+  compact: { name: '紧凑', desc: '更多图标', cols: 5, rows: 3 },
+  comfortable: { name: '舒适', desc: '均衡布局', cols: 4, rows: 3 },
+  spacious: { name: '宽松', desc: '大图标', cols: 3, rows: 2 }
+}
+
 const DEFAULT_ICON_SETTINGS = {
   pageWidth: 64,
   columnGap: 18,
-  rowGap: 18
+  rowGap: 18,
+  tileWidth: 82,
+  iconShellSize: 44,
+  preset: 'comfortable' as string
 }
 const DEFAULT_GENERAL_SETTINGS = {
   hideSettingsTrigger: false
@@ -172,6 +207,7 @@ let folderDragGhostFrame = 0
 
 document.addEventListener('DOMContentLoaded', () => {
   bindEvents()
+  renderIconPresetCards()
   void preloadBackgroundSettings()
   void refreshNewTab()
 })
@@ -375,6 +411,8 @@ function bindIconSettingsEvents(): void {
   document.getElementById('icon-page-width')?.addEventListener('input', handleIconSettingsChange)
   document.getElementById('icon-column-gap')?.addEventListener('input', handleIconSettingsChange)
   document.getElementById('icon-row-gap')?.addEventListener('input', handleIconSettingsChange)
+  document.getElementById('icon-advanced-toggle')?.addEventListener('click', toggleIconAdvanced)
+  document.getElementById('icon-preset-row')?.addEventListener('click', handlePresetCardClick)
 }
 
 function bindGeneralSettingsEvents(): void {
@@ -518,6 +556,9 @@ async function updateSelectedFolders(
 
 function handleIconSettingsChange(): void {
   state.iconSettings = readIconSettingsFromControls()
+  if (state.iconSettings.preset !== 'custom') {
+    state.iconSettings = { ...state.iconSettings, preset: 'custom' }
+  }
   void saveIconSettings()
   render()
   syncIconSettingsControls()
@@ -1873,6 +1914,8 @@ function createBookmarkSections(sections: NewTabFolderSection[]): HTMLElement {
   view.style.setProperty('--icon-page-width', `${getIconPageWidthPx(state.iconSettings.pageWidth)}px`)
   view.style.setProperty('--icon-column-gap', `${getIconGapPx(state.iconSettings.columnGap)}px`)
   view.style.setProperty('--icon-row-gap', `${getIconGapPx(state.iconSettings.rowGap)}px`)
+  view.style.setProperty('--icon-tile-width', `${state.iconSettings.tileWidth}px`)
+  view.style.setProperty('--icon-shell-size', `${state.iconSettings.iconShellSize}px`)
 
   const groupList = document.createElement('div')
   groupList.className = 'bookmark-folder-sections'
@@ -3435,6 +3478,8 @@ function applyFolderSettings(): void {
   )
 }
 
+const PRESET_KEYS = new Set(['compact', 'comfortable', 'spacious', 'custom'])
+
 function normalizeIconSettings(rawSettings: unknown): typeof DEFAULT_ICON_SETTINGS {
   if (!rawSettings || typeof rawSettings !== 'object' || Array.isArray(rawSettings)) {
     return { ...DEFAULT_ICON_SETTINGS }
@@ -3442,21 +3487,29 @@ function normalizeIconSettings(rawSettings: unknown): typeof DEFAULT_ICON_SETTIN
 
   const settings = rawSettings as Record<string, unknown>
   const legacySpacing = settings.spacing
-  return {
-    pageWidth: clampNumber(settings.pageWidth, 16, 100, DEFAULT_ICON_SETTINGS.pageWidth),
-    columnGap: clampNumber(
-      settings.columnGap ?? legacySpacing,
-      0,
-      100,
-      DEFAULT_ICON_SETTINGS.columnGap
-    ),
-    rowGap: clampNumber(
-      settings.rowGap ?? legacySpacing,
-      0,
-      100,
-      DEFAULT_ICON_SETTINGS.rowGap
-    )
+
+  const pageWidth = clampNumber(settings.pageWidth, 16, 100, DEFAULT_ICON_SETTINGS.pageWidth)
+  const columnGap = clampNumber(
+    settings.columnGap ?? legacySpacing,
+    0,
+    100,
+    DEFAULT_ICON_SETTINGS.columnGap
+  )
+  const rowGap = clampNumber(
+    settings.rowGap ?? legacySpacing,
+    0,
+    100,
+    DEFAULT_ICON_SETTINGS.rowGap
+  )
+  const tileWidth = clampNumber(settings.tileWidth, 60, 120, DEFAULT_ICON_SETTINGS.tileWidth)
+  const iconShellSize = clampNumber(settings.iconShellSize, 28, 64, DEFAULT_ICON_SETTINGS.iconShellSize)
+
+  let preset = typeof settings.preset === 'string' ? settings.preset : ''
+  if (!PRESET_KEYS.has(preset)) {
+    preset = detectPresetFromValues({ pageWidth, columnGap, rowGap, tileWidth, iconShellSize })
   }
+
+  return { pageWidth, columnGap, rowGap, tileWidth, iconShellSize, preset }
 }
 
 function readIconSettingsFromControls(): typeof DEFAULT_ICON_SETTINGS {
@@ -3473,7 +3526,10 @@ function readIconSettingsFromControls(): typeof DEFAULT_ICON_SETTINGS {
       : state.iconSettings.columnGap,
     rowGap: rowGapInput instanceof HTMLInputElement
       ? Number(rowGapInput.value)
-      : state.iconSettings.rowGap
+      : state.iconSettings.rowGap,
+    tileWidth: state.iconSettings.tileWidth,
+    iconShellSize: state.iconSettings.iconShellSize,
+    preset: state.iconSettings.preset
   })
 }
 
@@ -3492,6 +3548,8 @@ function syncIconSettingsControls(): void {
   if (rowGapInput instanceof HTMLInputElement) {
     rowGapInput.value = String(settings.rowGap)
   }
+
+  syncPresetCardSelection()
 }
 
 async function saveIconSettings(): Promise<void> {
@@ -3506,6 +3564,108 @@ function getIconPageWidthPx(pageWidth: number): number {
 
 function getIconGapPx(spacing: number): number {
   return clampNumber(14 + spacing, 14, 114, 32)
+}
+
+function detectPresetFromValues(settings: Omit<typeof DEFAULT_ICON_SETTINGS, 'preset'>): string {
+  for (const [key, preset] of Object.entries(ICON_LAYOUT_PRESETS)) {
+    if (
+      settings.pageWidth === preset.pageWidth &&
+      settings.columnGap === preset.columnGap &&
+      settings.rowGap === preset.rowGap &&
+      settings.tileWidth === preset.tileWidth &&
+      settings.iconShellSize === preset.iconShellSize
+    ) {
+      return key
+    }
+  }
+  return 'custom'
+}
+
+function applyIconPreset(presetKey: IconLayoutPresetKey): void {
+  const preset = ICON_LAYOUT_PRESETS[presetKey]
+  state.iconSettings = {
+    pageWidth: preset.pageWidth,
+    columnGap: preset.columnGap,
+    rowGap: preset.rowGap,
+    tileWidth: preset.tileWidth,
+    iconShellSize: preset.iconShellSize,
+    preset: presetKey
+  }
+  void saveIconSettings()
+  render()
+  syncIconSettingsControls()
+  updateAllSettingRangeVisuals()
+  updateClockText()
+}
+
+function toggleIconAdvanced(): void {
+  const toggle = document.getElementById('icon-advanced-toggle')
+  const panel = document.getElementById('icon-advanced-panel')
+  if (!toggle || !panel) return
+
+  const expanded = toggle.getAttribute('aria-expanded') === 'true'
+  toggle.setAttribute('aria-expanded', String(!expanded))
+  toggle.classList.toggle('expanded', !expanded)
+  panel.hidden = expanded
+}
+
+function handlePresetCardClick(event: Event): void {
+  const target = event.target
+  const card = target instanceof HTMLElement ? target.closest<HTMLElement>('.icon-preset-card') : null
+  if (!card) return
+
+  const presetKey = card.dataset.preset as IconLayoutPresetKey | undefined
+  if (presetKey && presetKey in ICON_LAYOUT_PRESETS) {
+    applyIconPreset(presetKey)
+  }
+}
+
+function syncPresetCardSelection(): void {
+  const cards = document.querySelectorAll<HTMLElement>('.icon-preset-card')
+  for (const card of cards) {
+    card.classList.toggle('selected', card.dataset.preset === state.iconSettings.preset)
+  }
+}
+
+function syncIconAdvancedPanel(): void {
+  // sliders are always enabled; dragging auto-switches to custom preset
+}
+
+function renderIconPresetCards(): void {
+  const row = document.getElementById('icon-preset-row')
+  if (!row) return
+
+  row.replaceChildren()
+  for (const [key, meta] of Object.entries(ICON_PRESET_META)) {
+    const card = document.createElement('button')
+    card.className = 'icon-preset-card'
+    card.type = 'button'
+    card.dataset.preset = key
+
+    const preview = document.createElement('div')
+    preview.className = 'icon-preset-preview'
+    preview.style.gridTemplateColumns = `repeat(${meta.cols}, 1fr)`
+    preview.style.gap = key === 'compact' ? '2px' : key === 'spacious' ? '4px' : '3px'
+    preview.style.padding = '0 4px'
+
+    for (let i = 0; i < meta.cols * meta.rows; i++) {
+      const cell = document.createElement('span')
+      cell.className = 'icon-preset-preview-cell'
+      cell.style.height = key === 'compact' ? '10px' : key === 'spacious' ? '14px' : '11px'
+      preview.appendChild(cell)
+    }
+
+    const name = document.createElement('span')
+    name.className = 'icon-preset-name'
+    name.textContent = meta.name
+
+    const desc = document.createElement('span')
+    desc.className = 'icon-preset-desc'
+    desc.textContent = meta.desc
+
+    card.append(preview, name, desc)
+    row.appendChild(card)
+  }
 }
 
 function submitSearch(value: string): void {

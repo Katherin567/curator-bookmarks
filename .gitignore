@@ -13,7 +13,6 @@ release/
 .agents/
 .claude/
 CLAUDE.md
-skills-lock.json
 
 # Local design drafts
 DESIGN.md
