@@ -1,4 +1,5 @@
 import type { NavigationNetworkEvidence } from './types.js'
+import type { BookmarkTagAnalysisInput } from './bookmark-tags.js'
 
 type NavigationStatus = 'available' | 'failed'
 
@@ -21,6 +22,7 @@ export interface BookmarkSaveMessage {
   parentId?: string
   folderPath?: string
   bookmarkId?: string
+  analysis?: BookmarkTagAnalysisInput
 }
 
 export interface NavigationCheckResult {

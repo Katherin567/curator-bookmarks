@@ -28,6 +28,17 @@ import {
   extractDomain,
   buildDuplicateKey
 } from '../shared/text.js'
+import {
+  buildBookmarkTagExport,
+  clearBookmarkTagIndex,
+  loadBookmarkTagIndex,
+  mergeBookmarkTagImport,
+  normalizeBookmarkTags,
+  normalizeBookmarkTagIndex,
+  saveBookmarkTagIndex,
+  upsertBookmarkTagFromAnalysis,
+  type BookmarkTagIndex
+} from '../shared/bookmark-tags.js'
 import { cancelNavigationCheck, requestNavigationCheck } from '../shared/messages.js'
 import { renderDotMatrixLoader } from '../shared/dot-matrix-loader.js'
 import {
@@ -243,7 +254,8 @@ async function hydratePersistentState() {
       STORAGE_KEYS.bookmarkAddHistory,
       STORAGE_KEYS.redirectCache,
       STORAGE_KEYS.recycleBin,
-      STORAGE_KEYS.aiProviderSettings
+      STORAGE_KEYS.aiProviderSettings,
+      STORAGE_KEYS.bookmarkTagIndex
     ])
 
     managerState.ignoreRules = normalizeIgnoreRules(stored[STORAGE_KEYS.ignoreRules])
@@ -252,6 +264,7 @@ async function hydratePersistentState() {
     managerState.redirectCache = normalizeRedirectCache(stored[STORAGE_KEYS.redirectCache])
     managerState.recycleBin = normalizeRecycleBin(stored[STORAGE_KEYS.recycleBin])
     aiNamingManagerState.settings = normalizeAiNamingSettings(stored[STORAGE_KEYS.aiProviderSettings])
+    aiNamingState.tagIndex = normalizeBookmarkTagIndex(stored[STORAGE_KEYS.bookmarkTagIndex])
     void removeLocalStorage(LEGACY_AI_NAMING_CACHE_STORAGE_KEYS).catch(() => {})
   } catch (error) {
     availabilityState.lastError =
@@ -338,12 +351,17 @@ function bindEvents() {
   dom.aiSelectHighConfidence?.addEventListener('click', selectHighConfidenceAiResults)
   dom.aiClearSelection?.addEventListener('click', clearAiNamingSelection)
   dom.aiApplySelection?.addEventListener('click', applySelectedAiNamingResults)
+  dom.aiMoveSelectionToSuggested?.addEventListener('click', handleMoveSelectedAiNamingResults)
   dom.aiResults?.addEventListener('click', handleAiResultsClick)
   dom.aiResults?.addEventListener('change', handleAiResultsChange)
   dom.aiFilterStatus?.addEventListener('change', handleAiResultsFilterChange)
   dom.aiFilterConfidence?.addEventListener('change', handleAiResultsFilterChange)
   dom.aiFilterQuery?.addEventListener('input', handleAiResultsFilterChange)
   dom.aiClearFilters?.addEventListener('click', clearAiResultsFilters)
+  dom.aiTagExport?.addEventListener('click', handleBookmarkTagExport)
+  dom.aiTagImport?.addEventListener('click', () => dom.aiTagImportInput?.click())
+  dom.aiTagImportInput?.addEventListener('change', handleBookmarkTagImport)
+  dom.aiTagClear?.addEventListener('click', handleBookmarkTagClear)
   dom.aiBaseUrl?.addEventListener('input', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
   dom.aiApiKey?.addEventListener('input', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
   dom.aiRevealApiKey?.addEventListener('change', handleAiRevealApiKeyChange)
@@ -853,6 +871,8 @@ function resetAiNamingRunState() {
   aiNamingState.failedCount = 0
   aiNamingState.results = []
   aiNamingState.selectedResultIds = new Set()
+  aiNamingState.pendingMoveResultIds = new Set()
+  aiNamingState.pendingMoveSelection = false
   aiNamingState.lastCompletedAt = 0
   aiNamingState.lastError = ''
 }
@@ -1553,10 +1573,10 @@ function syncAiNamingSettingsDraftFromDom({ markDirty = false } = {}) {
     apiStyle: dom.aiApiStyle.value,
     timeoutMs: dom.aiTimeoutMs.value,
     batchSize: dom.aiBatchSize.value,
-    autoSelectHighConfidence: dom.aiAutoSelectHigh.checked,
+    autoSelectHighConfidence: dom.aiAutoSelectHigh?.checked ?? aiNamingManagerState.settings.autoSelectHighConfidence,
     allowRemoteParsing: Boolean(dom.aiAllowRemoteParser?.checked),
     autoAnalyzeBookmarks: Boolean(dom.aiAutoAnalyzeBookmarks?.checked),
-    systemPrompt: dom.aiSystemPrompt.value
+    systemPrompt: dom.aiSystemPrompt?.value ?? aiNamingManagerState.settings.systemPrompt
   })
 
   if (markDirty) {
@@ -1944,6 +1964,8 @@ function renderAiNamingSection() {
   })
   dom.aiProgressBar.style.width = `${Math.max(0, Math.min(progressValue, 100))}%`
 
+  renderBookmarkTagDataCard()
+
   dom.aiAction.disabled =
     availabilityState.catalogLoading ||
     !hasRequiredConfig ||
@@ -1951,7 +1973,7 @@ function renderAiNamingSection() {
     aiNamingState.running ||
     aiNamingState.applying ||
     aiNamingState.requestingPermission
-  dom.aiAction.textContent = aiNamingState.lastCompletedAt ? '重新生成建议' : '开始生成建议'
+  dom.aiAction.textContent = aiNamingState.lastCompletedAt ? '重新分析并生成建议' : '开始分析并生成建议'
   if (dom.aiPauseAction) {
     dom.aiPauseAction.classList.toggle('hidden', !aiNamingState.running)
     dom.aiPauseAction.disabled = !aiNamingState.running || aiNamingState.stopRequested
@@ -1992,6 +2014,7 @@ function renderAiNamingSection() {
   const selectableResults = getSelectableAiNamingResults()
   const highConfidenceResults = selectableResults.filter((result) => result.confidence === 'high')
   const selectedResults = getSelectedAiNamingResults()
+  const selectedMovableResults = selectedResults.filter((result) => canMoveAiNamingResultToSuggestedFolder(result))
   dom.aiSelectionGroup.classList.toggle('hidden', selectableResults.length === 0)
   dom.aiSelectionCount.textContent = `${selectedResults.length} 条已选择`
   dom.aiSelectAll.disabled =
@@ -2004,18 +2027,171 @@ function renderAiNamingSection() {
     highConfidenceResults.length === 0
   dom.aiClearSelection.disabled = selectedResults.length === 0
   dom.aiApplySelection.disabled = aiNamingState.running || aiNamingState.applying || selectedResults.length === 0
+  if (dom.aiMoveSelectionToSuggested) {
+    const pending = aiNamingState.pendingMoveSelection && selectedMovableResults.length > 0
+    dom.aiMoveSelectionToSuggested.disabled =
+      aiNamingState.running ||
+      aiNamingState.applying ||
+      selectedMovableResults.length === 0
+    dom.aiMoveSelectionToSuggested.classList.toggle('confirm', pending)
+    dom.aiMoveSelectionToSuggested.innerHTML = pending
+      ? '<span class="double-confirm-icon" aria-hidden="true">✓✓</span> 确认移动'
+      : '移动至推荐文件夹'
+    dom.aiMoveSelectionToSuggested.title = selectedMovableResults.length
+      ? pending
+        ? `再次点击，移动 ${selectedMovableResults.length} 条书签到各自推荐文件夹`
+        : `移动 ${selectedMovableResults.length} 条书签到各自推荐文件夹`
+      : '所选结果没有可用的推荐文件夹'
+  }
 
   const visibleAiResults = getVisibleAiNamingResults()
   dom.aiResultCount.textContent = visibleAiResults.length === aiNamingState.results.length
     ? `${aiNamingState.results.length} 条结果`
     : `${visibleAiResults.length} / ${aiNamingState.results.length} 条结果`
   dom.aiResultsSubtitle.textContent = aiNamingState.lastCompletedAt
-    ? `最近一次完成于 ${formatDateTime(aiNamingState.lastCompletedAt)}。建议改名 ${aiNamingState.suggestedCount} 条，待确认 ${aiNamingState.manualReviewCount} 条，失败 ${aiNamingState.failedCount} 条。网页内容与 AI 建议每次都会重新生成。`
-    : '在通用设置中配置 AI 渠道后，开始生成建议，这里会展示当前标题、建议标题、置信度与原因。'
+    ? `最近一次完成于 ${formatDateTime(aiNamingState.lastCompletedAt)}。建议改名 ${aiNamingState.suggestedCount} 条，待确认 ${aiNamingState.manualReviewCount} 条，失败 ${aiNamingState.failedCount} 条。网页标签与 AI 建议每次都会重新生成。`
+    : '在通用设置中配置 AI 渠道后，开始分析并生成建议，这里会展示当前标题、建议标题、标签、置信度与原因。'
 
   renderAiResultsFilterControls()
 
   renderAiNamingResults()
+}
+
+function renderBookmarkTagDataCard() {
+  if (!dom.aiTagDataCount) {
+    return
+  }
+
+  const index = normalizeBookmarkTagIndex(aiNamingState.tagIndex)
+  const records = Object.values(index.records)
+  const latestUpdatedAt = records.length
+    ? records.reduce((latest, record) => {
+        return Math.max(latest, Number(record.updatedAt) || 0)
+      }, 0)
+    : 0
+  dom.aiTagDataCount.textContent = `${records.length} 条记录`
+  dom.aiTagDataUpdated.textContent = latestUpdatedAt
+    ? `最近更新于 ${formatDateTime(latestUpdatedAt)}。`
+    : '尚未生成标签数据。'
+  if (dom.aiTagDataStatus) {
+    dom.aiTagDataStatus.textContent = aiNamingState.tagDataStatus || ''
+  }
+  if (dom.aiTagExport) {
+    dom.aiTagExport.disabled = records.length === 0 || aiNamingState.running || aiNamingState.applying
+  }
+  if (dom.aiTagImport) {
+    dom.aiTagImport.disabled = aiNamingState.running || aiNamingState.applying
+  }
+  if (dom.aiTagClear) {
+    dom.aiTagClear.disabled = records.length === 0 || aiNamingState.running || aiNamingState.applying
+  }
+}
+
+async function handleBookmarkTagExport() {
+  try {
+    const bookmarks = await getCurrentBookmarksForTagData()
+    const index = await loadBookmarkTagIndex()
+    aiNamingState.tagIndex = index
+    const payload = buildBookmarkTagExport(index, bookmarks)
+    if (!payload.records.length) {
+      aiNamingState.tagDataStatus = '没有可导出的标签记录。'
+      renderAiNamingSection()
+      return
+    }
+
+    downloadJsonFile(
+      `curator-bookmark-tags-${new Date().toISOString().slice(0, 10)}.json`,
+      payload
+    )
+    aiNamingState.tagDataStatus = `已导出 ${payload.records.length} 条标签记录。`
+    renderAiNamingSection()
+  } catch (error) {
+    aiNamingState.tagDataStatus = error instanceof Error ? error.message : '标签数据导出失败。'
+    renderAiNamingSection()
+  }
+}
+
+async function handleBookmarkTagImport(event) {
+  const input = event?.target
+  const file = input?.files?.[0]
+  if (!file) {
+    return
+  }
+
+  try {
+    const rawText = await readTextFile(file)
+    const payload = JSON.parse(rawText)
+    const bookmarks = await getCurrentBookmarksForTagData()
+    const currentIndex = await loadBookmarkTagIndex()
+    const result = mergeBookmarkTagImport(currentIndex, payload, bookmarks)
+    const savedIndex = await saveBookmarkTagIndex(result.index)
+    aiNamingState.tagIndex = savedIndex
+    aiNamingState.tagDataStatus =
+      `导入完成：新增 ${result.added}，覆盖 ${result.overwritten}，跳过 ${result.skipped}，无法匹配 ${result.unmatched}。`
+  } catch (error) {
+    aiNamingState.tagDataStatus = error instanceof Error ? error.message : '标签数据导入失败。'
+  } finally {
+    if (input) {
+      input.value = ''
+    }
+    renderAiNamingSection()
+  }
+}
+
+async function handleBookmarkTagClear() {
+  const confirmed = await requestConfirmation({
+    title: '清空标签数据？',
+    copy: '只会清空本地 AI 标签库，不会删除 Chrome 书签、AI 渠道设置或 API Key。建议先导出备份。',
+    confirmLabel: '清空标签数据',
+    cancelLabel: '取消',
+    tone: 'danger',
+    label: 'Clear'
+  })
+
+  if (!confirmed) {
+    return
+  }
+
+  try {
+    await clearBookmarkTagIndex()
+    aiNamingState.tagIndex = normalizeBookmarkTagIndex(null)
+    aiNamingState.tagDataStatus = '已清空标签数据。'
+    renderAiNamingSection()
+  } catch (error) {
+    aiNamingState.tagDataStatus = error instanceof Error ? error.message : '标签数据清空失败。'
+    renderAiNamingSection()
+  }
+}
+
+async function getCurrentBookmarksForTagData() {
+  if (availabilityState.allBookmarks.length) {
+    return availabilityState.allBookmarks
+  }
+
+  const tree = await getBookmarkTree()
+  const rootNode = Array.isArray(tree) ? tree[0] : tree
+  return extractBookmarkData(rootNode).bookmarks
+}
+
+function readTextFile(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.addEventListener('load', () => resolve(String(reader.result || '')))
+    reader.addEventListener('error', () => reject(new Error('标签数据文件读取失败。')))
+    reader.readAsText(file)
+  })
+}
+
+function downloadJsonFile(filename: string, payload: unknown): void {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    type: 'application/json'
+  })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(url)
 }
 
 function getAiNamingModelOptions(settings = aiNamingManagerState.settings) {
@@ -2481,9 +2657,13 @@ function renderAiNamingResults() {
   }
 
   const visibleResults = getVisibleAiNamingResults()
+  const visibleResultIds = new Set(visibleResults.map((result) => String(result.id)))
+  aiNamingState.expandedTagResultIds = new Set(
+    [...aiNamingState.expandedTagResultIds].filter((id) => visibleResultIds.has(String(id)))
+  )
 
   if (aiNamingState.running && !aiNamingState.results.length) {
-    dom.aiResults.innerHTML = '<div class="detect-empty">正在抓取网页元信息并生成命名建议，请稍候。</div>'
+    dom.aiResults.innerHTML = '<div class="detect-empty">正在读取网页内容、生成标签并生成命名建议，请稍候。</div>'
     return
   }
 
@@ -2491,19 +2671,44 @@ function renderAiNamingResults() {
     dom.aiResults.innerHTML = aiNamingState.lastError
       ? `<div class="detect-empty">${escapeHtml(aiNamingState.lastError)}</div>`
       : aiNamingState.lastCompletedAt
-        ? '<div class="detect-empty">最近一次生成已完成，当前没有待处理的 AI 命名结果。</div>'
-        : '<div class="detect-empty">保存 AI 渠道并开始生成建议后，这里会展示批量预览结果。</div>'
+        ? '<div class="detect-empty">最近一次生成已完成，当前没有待处理的 AI 标签与命名结果。</div>'
+        : '<div class="detect-empty">保存 AI 渠道并开始分析后，这里会展示标签与命名建议。</div>'
     return
   }
 
   if (!visibleResults.length) {
-    dom.aiResults.innerHTML = '<div class="detect-empty">当前筛选条件下没有匹配的 AI 命名结果。</div>'
+    dom.aiResults.innerHTML = '<div class="detect-empty">当前筛选条件下没有匹配的 AI 标签与命名结果。</div>'
     return
   }
 
   dom.aiResults.innerHTML = visibleResults
     .map((result) => buildAiNamingResultCard(result))
     .join('')
+  syncAiResultTagOverflow()
+}
+
+function syncAiResultTagOverflow() {
+  if (!dom.aiResults) {
+    return
+  }
+
+  window.requestAnimationFrame(() => {
+    dom.aiResults.querySelectorAll<HTMLElement>('[data-ai-tag-shell]').forEach((shell) => {
+      const resultId = String(shell.getAttribute('data-ai-tag-shell') || '')
+      const list = shell.querySelector<HTMLElement>('[data-ai-tag-list]')
+      const toggle = shell.querySelector<HTMLElement>('[data-ai-toggle-tags]')
+      if (!resultId || !list || !toggle) {
+        return
+      }
+
+      const expanded = aiNamingState.expandedTagResultIds.has(resultId)
+      shell.classList.toggle('expanded', expanded)
+      toggle.textContent = expanded ? '收起标签' : '展开标签'
+      toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false')
+      const hasOverflow = list.scrollHeight > list.clientHeight + 1
+      toggle.classList.toggle('hidden', !expanded && !hasOverflow)
+    })
+  })
 }
 
 function getVisibleAiNamingResults() {
@@ -2539,7 +2744,8 @@ function getVisibleAiNamingResults() {
         result.contentType,
         result.suggestedFolder,
         ...(Array.isArray(result.topics) ? result.topics : []),
-        ...(Array.isArray(result.tags) ? result.tags : [])
+        ...(Array.isArray(result.tags) ? result.tags : []),
+        ...(Array.isArray(result.aliases) ? result.aliases : [])
       ].join(' '))
       if (!haystack.includes(normalizedQuery)) {
         return false
@@ -2594,6 +2800,8 @@ function buildAiNamingResultCard(result) {
   const selectable = result.status === 'suggested'
   const interactionLocked = aiNamingState.running || aiNamingState.applying
   const isSelected = aiNamingState.selectedResultIds.has(String(result.id))
+  const canMoveToSuggestedFolder = canMoveAiNamingResultToSuggestedFolder(result)
+  const pendingMove = aiNamingState.pendingMoveResultIds.has(String(result.id))
   const badgeTone = result.status === 'failed'
     ? 'danger'
     : result.confidence === 'high'
@@ -2604,6 +2812,8 @@ function buildAiNamingResultCard(result) {
   const statusLabel = getAiNamingStatusLabel(result)
   const topics = Array.isArray(result.topics) ? result.topics : []
   const tags = Array.isArray(result.tags) ? result.tags : []
+  const aliases = Array.isArray(result.aliases) ? result.aliases : []
+  const tagsExpanded = aiNamingState.expandedTagResultIds.has(String(result.id))
   const detailRows = [
     result.summary ? `摘要：${result.summary}` : '',
     result.contentType || topics.length
@@ -2611,9 +2821,48 @@ function buildAiNamingResultCard(result) {
       : '',
     result.suggestedFolder ? `推荐文件夹：${result.suggestedFolder}` : '',
     tags.length ? `标签：${tags.join(' / ')}` : '',
+    aliases.length ? `别名：${aliases.join(' / ')}` : '',
     result.extractionStatus ? `内容来源：${getAiExtractionLabel(result.extractionStatus, result.extractionSource)}` : '',
     result.reason || result.detail || ''
   ].filter(Boolean)
+  const tagPreviewMarkup = tags.length
+    ? `
+        <div class="ai-result-tag-shell ${tagsExpanded ? 'expanded' : ''}" data-ai-tag-shell="${escapeAttr(result.id)}">
+          <div class="ai-result-tag-list" aria-label="标签预览" data-ai-tag-list="${escapeAttr(result.id)}">
+            ${tags.map((tag) => `<span class="ai-result-tag">${escapeHtml(tag)}</span>`).join('')}
+          </div>
+          <button
+            class="ai-result-tag-toggle hidden"
+            type="button"
+            data-ai-toggle-tags="${escapeAttr(result.id)}"
+            aria-expanded="${tagsExpanded ? 'true' : 'false'}"
+          >${tagsExpanded ? '收起标签' : '展开标签'}</button>
+        </div>
+      `
+    : ''
+  const detailMarkup = detailRows.length
+    ? `
+        <details class="ai-result-details">
+          <summary>分析细节</summary>
+          <div class="ai-result-detail-list">
+            ${detailRows.map((detail) => `<p class="detect-result-detail">${escapeHtml(detail)}</p>`).join('')}
+          </div>
+        </details>
+      `
+    : ''
+  const moveButtonMarkup = canMoveToSuggestedFolder
+    ? `
+        <button
+          class="detect-result-action ai-move-recommended-action double-confirm-action ${pendingMove ? 'confirm' : ''}"
+          type="button"
+          data-ai-move-recommended="${escapeAttr(result.id)}"
+          title="${escapeAttr(pendingMove ? `再次点击，移动到 ${result.suggestedFolder}` : `移动到 ${result.suggestedFolder}`)}"
+          ${interactionLocked ? 'disabled' : ''}
+        >
+          ${pendingMove ? '<span class="double-confirm-icon" aria-hidden="true">✓✓</span> 确认移动' : '移动至推荐文件夹'}
+        </button>
+      `
+    : ''
 
   return `
     <article class="detect-result-card ${isSelected ? 'selected' : ''}">
@@ -2634,15 +2883,19 @@ function buildAiNamingResultCard(result) {
         </div>
         <div class="detect-result-actions">
           <a class="detect-result-open" href="${escapeAttr(result.url)}" target="_blank" rel="noreferrer noopener">打开页面</a>
+          ${moveButtonMarkup}
           ${selectable ? `<button class="detect-result-action" type="button" data-ai-apply="${escapeAttr(result.id)}" ${interactionLocked ? 'disabled' : ''}>应用建议</button>` : ''}
         </div>
       </div>
       <div class="detect-result-copy ai-result-copy">
         <strong>${escapeHtml(result.currentTitle || '未命名书签')}</strong>
         <p class="ai-result-suggested">${escapeHtml(result.suggestedTitle || '未生成建议标题')}</p>
-        <p class="detect-result-url">${escapeHtml(displayUrl(result.url))}</p>
-        <p class="detect-result-path">${escapeHtml(result.path || '未归档路径')}</p>
-        ${detailRows.map((detail) => `<p class="detect-result-detail">${escapeHtml(detail)}</p>`).join('')}
+        <div class="ai-result-meta">
+          <span>${escapeHtml(displayUrl(result.url))}</span>
+          <span>${escapeHtml(result.path || '未归档路径')}</span>
+        </div>
+        ${tagPreviewMarkup}
+        ${detailMarkup}
       </div>
     </article>
   `
@@ -2650,6 +2903,234 @@ function buildAiNamingResultCard(result) {
 
 function getSelectableAiNamingResults() {
   return getVisibleAiNamingResults().filter((result) => result.status === 'suggested')
+}
+
+function canMoveAiNamingResultToSuggestedFolder(result) {
+  if (!result?.id) {
+    return false
+  }
+
+  const suggestedFolder = normalizeAiSuggestedFolderPath(result.suggestedFolder)
+  if (!suggestedFolder) {
+    return false
+  }
+
+  const matchedFolder = findAiSuggestedFolder(result.suggestedFolder, result.parentId)
+  if (matchedFolder) {
+    return String(matchedFolder.id) !== String(result.parentId || '')
+  }
+
+  const currentPath = normalizeAiSuggestedFolderPath(result.path)
+  return normalizeText(suggestedFolder) !== normalizeText(currentPath)
+}
+
+function splitAiSuggestedFolderPath(value) {
+  return String(value || '')
+    .split(/\s*(?:->|\/|>|›|»|\\|·|•|→|➜)\s*/g)
+    .map((segment) => normalizeAiResultText(segment, 60))
+    .filter(Boolean)
+    .slice(0, 5)
+}
+
+function normalizeAiSuggestedFolderPath(value) {
+  const segments = splitAiSuggestedFolderPath(value)
+  if (!segments.length) {
+    return ''
+  }
+
+  const strippedSegments = stripKnownRootFolderSegment(segments)
+  return (strippedSegments.length ? strippedSegments : segments).join(' / ')
+}
+
+function normalizeAiFolderFullPath(value) {
+  return splitAiSuggestedFolderPath(value).join(' / ')
+}
+
+function stripKnownRootFolderSegment(segments) {
+  if (!segments.length || !getKnownRootFolderByTitle(segments[0])) {
+    return segments.slice()
+  }
+
+  return segments.slice(1)
+}
+
+function getKnownRootFolderByTitle(title) {
+  const normalizedTitle = normalizeText(title)
+  if (!normalizedTitle) {
+    return null
+  }
+
+  const rootFolders = (availabilityState.allFolders || []).filter((folder) => {
+    return Number(folder.depth) <= 1 && String(folder.id) !== ROOT_ID
+  })
+  const matchedRoot = rootFolders.find((folder) => {
+    return normalizeText(folder.title) === normalizedTitle || normalizeText(folder.path) === normalizedTitle
+  })
+
+  if (matchedRoot) {
+    return matchedRoot
+  }
+
+  const commonRootLabels = new Set([
+    '书签栏',
+    '书签列',
+    '收藏夹栏',
+    'bookmarks bar',
+    'bookmark bar',
+    'favorites bar',
+    '其他书签',
+    'other bookmarks',
+    '移动设备书签',
+    'mobile bookmarks'
+  ])
+  if (!commonRootLabels.has(normalizedTitle)) {
+    return null
+  }
+
+  return (
+    availabilityState.folderMap.get(BOOKMARKS_BAR_ID) ||
+    rootFolders.find((folder) => normalizeText(folder.title) === normalizedTitle) ||
+    null
+  )
+}
+
+function getAiFolderComparableKey(value) {
+  return normalizeText(normalizeAiSuggestedFolderPath(value))
+}
+
+function getAiFolderFullKey(value) {
+  return normalizeText(normalizeAiFolderFullPath(value))
+}
+
+function findAiSuggestedFolder(value, currentParentId = '') {
+  const segments = splitAiSuggestedFolderPath(value)
+  if (!segments.length) {
+    return null
+  }
+
+  const fullKey = getAiFolderFullKey(value)
+  const comparableKey = getAiFolderComparableKey(value)
+  const targetTitleKey = normalizeText(stripKnownRootFolderSegment(segments).at(-1) || segments.at(-1) || '')
+  const folders = (availabilityState.allFolders || []).filter((folder) => String(folder.id) !== ROOT_ID)
+  const matchGroups = [
+    folders.filter((folder) => getAiFolderFullKey(folder.path) === fullKey),
+    folders.filter((folder) => comparableKey && getAiFolderComparableKey(folder.path) === comparableKey),
+    segments.length === 1 || stripKnownRootFolderSegment(segments).length === 1
+      ? folders.filter((folder) => normalizeText(folder.title) === targetTitleKey)
+      : []
+  ]
+
+  for (const matches of matchGroups) {
+    if (!matches.length) {
+      continue
+    }
+
+    const currentFolder = matches.find((folder) => String(folder.id) === String(currentParentId || ''))
+    if (currentFolder) {
+      return currentFolder
+    }
+
+    return matches.slice().sort(compareAiSuggestedFolderCandidates)[0]
+  }
+
+  return null
+}
+
+function compareAiSuggestedFolderCandidates(left, right) {
+  const leftBookmarkCount = Number(left.bookmarkCount) || 0
+  const rightBookmarkCount = Number(right.bookmarkCount) || 0
+  return (
+    Number(left.depth || 0) - Number(right.depth || 0) ||
+    rightBookmarkCount - leftBookmarkCount ||
+    compareByPathTitle(left, right)
+  )
+}
+
+function getAiFolderCacheKey(value) {
+  return getAiFolderFullKey(value) || getAiFolderComparableKey(value)
+}
+
+function cacheAiSuggestedFolder(folderCache, pathValue, folderId) {
+  const fullKey = getAiFolderFullKey(pathValue)
+  const comparableKey = getAiFolderComparableKey(pathValue)
+  if (fullKey) {
+    folderCache.set(fullKey, String(folderId))
+  }
+  if (comparableKey) {
+    folderCache.set(comparableKey, String(folderId))
+  }
+}
+
+function getAiFolderCreationRoot(rawSegments) {
+  const rootMatch = getKnownRootFolderByTitle(rawSegments[0])
+  if (rootMatch) {
+    return {
+      rootId: String(rootMatch.id),
+      rootTitle: String(rootMatch.title || ''),
+      segments: rawSegments.slice(1)
+    }
+  }
+
+  const bookmarksBar = availabilityState.folderMap.get(BOOKMARKS_BAR_ID)
+  return {
+    rootId: BOOKMARKS_BAR_ID,
+    rootTitle: String(bookmarksBar?.title || '书签栏'),
+    segments: rawSegments.slice()
+  }
+}
+
+async function ensureAiSuggestedFolderPath(value, folderCache = new Map()) {
+  const rawSegments = splitAiSuggestedFolderPath(value)
+  if (!rawSegments.length) {
+    throw new Error('推荐文件夹为空。')
+  }
+
+  const cacheKey = getAiFolderCacheKey(value)
+  if (cacheKey && folderCache.has(cacheKey)) {
+    return folderCache.get(cacheKey)
+  }
+
+  const existingFolder = findAiSuggestedFolder(value)
+  if (existingFolder) {
+    cacheAiSuggestedFolder(folderCache, value, existingFolder.id)
+    return String(existingFolder.id)
+  }
+
+  const creationRoot = getAiFolderCreationRoot(rawSegments)
+  let parentId = creationRoot.rootId
+  let pathSegments = creationRoot.rootTitle ? [creationRoot.rootTitle] : []
+
+  if (!creationRoot.segments.length) {
+    cacheAiSuggestedFolder(folderCache, value, parentId)
+    return parentId
+  }
+
+  for (const segment of creationRoot.segments) {
+    pathSegments = [...pathSegments, segment]
+    const prefixPath = pathSegments.join(' / ')
+    const prefixKey = getAiFolderCacheKey(prefixPath)
+    if (prefixKey && folderCache.has(prefixKey)) {
+      parentId = String(folderCache.get(prefixKey))
+      continue
+    }
+
+    const existingPrefix = findAiSuggestedFolder(prefixPath)
+    if (existingPrefix) {
+      parentId = String(existingPrefix.id)
+      cacheAiSuggestedFolder(folderCache, prefixPath, parentId)
+      continue
+    }
+
+    const createdFolder = await createBookmark({
+      parentId,
+      title: segment
+    })
+    parentId = String(createdFolder.id)
+    cacheAiSuggestedFolder(folderCache, prefixPath, parentId)
+  }
+
+  cacheAiSuggestedFolder(folderCache, value, parentId)
+  return parentId
 }
 
 function getSelectedAiNamingResults() {
@@ -2664,10 +3145,12 @@ function getSelectedAiNamingResults() {
 
 function clearAiNamingSelection() {
   aiNamingState.selectedResultIds.clear()
+  aiNamingState.pendingMoveSelection = false
   renderAvailabilitySection()
 }
 
 function selectAllAiNamingResults() {
+  aiNamingState.pendingMoveSelection = false
   aiNamingState.selectedResultIds = new Set(
     getSelectableAiNamingResults().map((result) => String(result.id))
   )
@@ -2675,6 +3158,7 @@ function selectAllAiNamingResults() {
 }
 
 function selectHighConfidenceAiResults() {
+  aiNamingState.pendingMoveSelection = false
   aiNamingState.selectedResultIds = new Set(
     getSelectableAiNamingResults()
       .filter((result) => result.confidence === 'high')
@@ -2704,10 +3188,49 @@ function handleAiResultsChange(event) {
     aiNamingState.selectedResultIds.delete(bookmarkId)
   }
 
+  aiNamingState.pendingMoveSelection = false
   renderAvailabilitySection()
 }
 
 function handleAiResultsClick(event) {
+  const tagToggle = event.target.closest('[data-ai-toggle-tags]')
+  if (tagToggle) {
+    const bookmarkId = String(tagToggle.getAttribute('data-ai-toggle-tags') || '').trim()
+    if (!bookmarkId) {
+      return
+    }
+    if (aiNamingState.expandedTagResultIds.has(bookmarkId)) {
+      aiNamingState.expandedTagResultIds.delete(bookmarkId)
+    } else {
+      aiNamingState.expandedTagResultIds.add(bookmarkId)
+    }
+    renderAiNamingResults()
+    return
+  }
+
+  const moveButton = event.target.closest('[data-ai-move-recommended]')
+  if (moveButton) {
+    if (aiNamingState.running || aiNamingState.applying) {
+      return
+    }
+
+    const bookmarkId = String(moveButton.getAttribute('data-ai-move-recommended') || '').trim()
+    const targetResult = aiNamingState.results.find((result) => String(result.id) === bookmarkId)
+    if (!bookmarkId || !targetResult || !canMoveAiNamingResultToSuggestedFolder(targetResult)) {
+      return
+    }
+
+    if (aiNamingState.pendingMoveResultIds.has(bookmarkId)) {
+      moveAiNamingResultsToSuggestedFolders([bookmarkId])
+      return
+    }
+
+    aiNamingState.pendingMoveSelection = false
+    aiNamingState.pendingMoveResultIds = new Set([bookmarkId])
+    renderAvailabilitySection()
+    return
+  }
+
   const applyButton = event.target.closest('[data-ai-apply]')
   if (!applyButton || aiNamingState.running || aiNamingState.applying) {
     return
@@ -2738,13 +3261,13 @@ async function handleAiNamingAction() {
 
     const permissionGranted = await ensureAiNamingPermissionsForRun({ interactive: true })
     if (!permissionGranted) {
-      throw new Error('未授予网页抓取或 AI 服务访问权限，无法生成命名建议。')
+      throw new Error('未授予网页抓取或 AI 服务访问权限，无法生成标签与命名建议。')
     }
 
     await runAiNamingSuggestions()
   } catch (error) {
     aiNamingState.lastError =
-      error instanceof Error ? error.message : 'AI 命名失败，请稍后重试。'
+      error instanceof Error ? error.message : 'AI 标签与命名失败，请稍后重试。'
     renderAvailabilitySection()
   }
 }
@@ -2929,7 +3452,93 @@ async function applySelectedAiNamingResults() {
     return
   }
 
+  aiNamingState.pendingMoveSelection = false
+  aiNamingState.pendingMoveResultIds.clear()
   await applyAiNamingResultsByIds(selectedResults.map((result) => result.id))
+}
+
+async function handleMoveSelectedAiNamingResults() {
+  if (aiNamingState.running || aiNamingState.applying) {
+    return
+  }
+
+  const selectedMovableResults = getSelectedAiNamingResults()
+    .filter((result) => canMoveAiNamingResultToSuggestedFolder(result))
+  if (!selectedMovableResults.length) {
+    aiNamingState.pendingMoveSelection = false
+    renderAvailabilitySection()
+    return
+  }
+
+  if (!aiNamingState.pendingMoveSelection) {
+    aiNamingState.pendingMoveSelection = true
+    aiNamingState.pendingMoveResultIds.clear()
+    renderAvailabilitySection()
+    return
+  }
+
+  await moveAiNamingResultsToSuggestedFolders(selectedMovableResults.map((result) => result.id))
+}
+
+async function moveAiNamingResultsToSuggestedFolders(bookmarkIds) {
+  const targetIds = new Set(bookmarkIds.map((id) => String(id)).filter(Boolean))
+  const targetResults = aiNamingState.results.filter((result) => {
+    return targetIds.has(String(result.id)) && canMoveAiNamingResultToSuggestedFolder(result)
+  })
+
+  if (!targetResults.length) {
+    aiNamingState.pendingMoveSelection = false
+    aiNamingState.pendingMoveResultIds.clear()
+    renderAvailabilitySection()
+    return
+  }
+
+  aiNamingState.applying = true
+  aiNamingState.lastError = ''
+  renderAvailabilitySection()
+
+  const movedIds = []
+  const moveErrors = []
+  const folderCache = new Map()
+
+  try {
+    for (const result of targetResults) {
+      try {
+        const targetFolderId = await ensureAiSuggestedFolderPath(result.suggestedFolder, folderCache)
+        if (!targetFolderId || String(targetFolderId) === String(result.parentId || '')) {
+          continue
+        }
+
+        await moveBookmark(String(result.id), String(targetFolderId))
+        movedIds.push(String(result.id))
+      } catch (error) {
+        const title = result.currentTitle || result.suggestedTitle || result.url || result.id
+        const message = error instanceof Error ? error.message : '未知错误'
+        moveErrors.push(`${title}：${message}`)
+      }
+    }
+  } finally {
+    aiNamingState.applying = false
+    aiNamingState.pendingMoveSelection = false
+    aiNamingState.pendingMoveResultIds.clear()
+
+    if (movedIds.length) {
+      await hydrateAvailabilityCatalog({ preserveResults: true })
+    }
+
+    if (moveErrors.length) {
+      const firstError = moveErrors[0]
+      aiNamingState.lastError = movedIds.length
+        ? `推荐文件夹移动完成 ${movedIds.length} 条，${moveErrors.length} 条失败：${firstError}`
+        : `移动至推荐文件夹失败：${firstError}`
+    } else if (movedIds.length) {
+      aiNamingState.lastError = `已将 ${movedIds.length} 条书签移动至推荐文件夹。`
+    } else {
+      aiNamingState.lastError = '所选书签已位于推荐文件夹。'
+    }
+
+    renderAvailabilitySection()
+  }
 }
 
 async function applyAiNamingResultsByIds(bookmarkIds) {
@@ -3060,24 +3669,24 @@ function getAiNamingStatusCopy() {
   }
 
   if (aiNamingState.settingsDirty) {
-    return '设置已修改，开始生成前会自动按当前输入保存。'
+    return '设置已修改，开始分析前会自动按当前输入保存。'
   }
 
   if (aiNamingState.running) {
     if (aiNamingState.paused) {
-      return 'AI 命名已暂停。继续后会保留当前结果并从下一条书签继续处理。'
+      return 'AI 标签与命名已暂停。继续后会保留当前结果并从下一条书签继续处理。'
     }
 
     return aiNamingManagerState.settings.allowRemoteParsing
-      ? '正在结合本地内容和 Jina Reader 解析结果生成建议。你可以随时停止当前批次。'
-      : '正在读取网页内容并生成命名建议。你可以随时停止当前批次。'
+      ? '正在结合本地内容和 Jina Reader 解析结果生成标签与命名建议。你可以随时停止当前批次。'
+      : '正在读取网页内容、生成标签并生成命名建议。你可以随时停止当前批次。'
   }
 
   if (aiNamingState.lastCompletedAt) {
-    return `最近一次 AI 命名建议完成于 ${formatDateTime(aiNamingState.lastCompletedAt)}。`
+    return `最近一次 AI 标签与命名建议完成于 ${formatDateTime(aiNamingState.lastCompletedAt)}。`
   }
 
-  return '配置 AI 渠道后，可批量生成更适合收藏和检索的书签标题。应用前你可以逐条预览。'
+  return '配置 AI 渠道后，可批量生成更适合收藏、检索和重命名的书签标签与标题。应用前你可以逐条预览。'
 }
 
 function getAiNamingProgressCopy() {
@@ -3085,7 +3694,7 @@ function getAiNamingProgressCopy() {
   const remoteCopy = aiNamingManagerState.settings.allowRemoteParsing
     ? '已开启 Jina Reader 远程解析，本轮会结合本地抽取与远程解析内容。'
     : '仅使用本地网页抓取与内容抽取。'
-  return `当前范围：${scopeMeta.label}。本轮会处理 ${aiNamingState.eligibleBookmarks} 条 http/https 书签，并调用模型 ${aiNamingManagerState.settings.model || '未配置'} 生成建议。${remoteCopy}`
+  return `当前范围：${scopeMeta.label}。本轮会处理 ${aiNamingState.eligibleBookmarks} 条 http/https 书签，并调用模型 ${aiNamingManagerState.settings.model || '未配置'} 生成标签和命名建议。${remoteCopy}`
 }
 
 function getAiNamingConnectivityMeta() {
@@ -3169,6 +3778,7 @@ function getAiExtractionLabel(status, source = '') {
 }
 
 async function runAiNamingSuggestions() {
+  const runStartedAt = Date.now()
   aiNamingState.running = true
   aiNamingState.stopRequested = false
   aiNamingState.paused = false
@@ -3251,9 +3861,17 @@ async function runAiNamingSuggestions() {
     }
 
     aiNamingState.lastCompletedAt = Date.now()
+    recalculateAiNamingSummary()
     if (aiNamingState.stopRequested) {
       aiNamingState.lastError = `已手动停止，本轮保留 ${aiNamingState.results.length} 条已生成结果。`
     }
+    notifyAiNamingRunFinished({
+      stopped: aiNamingState.stopRequested,
+      startedAt: runStartedAt,
+      completedAt: aiNamingState.lastCompletedAt
+    }).catch((error) => {
+      console.warn('[Curator] AI 标签与命名完成通知发送失败', error)
+    })
   } finally {
     aiNamingState.running = false
     aiNamingState.stopRequested = false
@@ -3262,6 +3880,94 @@ async function runAiNamingSuggestions() {
     recalculateAiNamingSummary()
     renderAvailabilitySection()
   }
+}
+
+async function notifyAiNamingRunFinished({
+  stopped = false,
+  startedAt = 0,
+  completedAt = Date.now()
+} = {}): Promise<void> {
+  if (!chrome.notifications?.create) {
+    return
+  }
+
+  const permissionLevel = await getNotificationPermissionLevel().catch(() => 'denied')
+  if (permissionLevel !== 'granted') {
+    return
+  }
+
+  const processed = Math.max(0, Number(aiNamingState.checkedBookmarks) || 0)
+  const total = Math.max(processed, Number(aiNamingState.eligibleBookmarks) || 0)
+  const title = stopped ? 'AI 标签与命名已停止' : 'AI 标签与命名已完成'
+  const message = stopped
+    ? `已处理 ${processed}/${total} 条，保留 ${aiNamingState.results.length} 条已生成结果。`
+    : `已处理 ${processed}/${total} 条，建议改名 ${aiNamingState.suggestedCount} 条，待确认 ${aiNamingState.manualReviewCount} 条，失败 ${aiNamingState.failedCount} 条。`
+  const elapsedCopy = formatElapsedTime(Math.max(0, Number(completedAt) - Number(startedAt || completedAt)))
+  const scopeMeta = getCurrentAiNamingScopeMeta()
+
+  await createOptionsNotification(`ai-naming-${completedAt}-${Math.random().toString(16).slice(2)}`, {
+    type: 'basic',
+    iconUrl: chrome.runtime.getURL('src/assets/icon128.png'),
+    title,
+    message,
+    contextMessage: `范围：${scopeMeta.label}${elapsedCopy ? ` · 用时 ${elapsedCopy}` : ''}`,
+    priority: 1,
+    requireInteraction: false,
+    silent: false
+  })
+}
+
+function getNotificationPermissionLevel(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!chrome.notifications?.getPermissionLevel) {
+      resolve('denied')
+      return
+    }
+
+    chrome.notifications.getPermissionLevel((level) => {
+      const error = chrome.runtime.lastError
+      if (error) {
+        reject(new Error(error.message))
+        return
+      }
+
+      resolve(String(level || 'denied'))
+    })
+  })
+}
+
+function createOptionsNotification(
+  notificationId: string,
+  options: chrome.notifications.NotificationOptions<true>
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    chrome.notifications.create(notificationId, options, () => {
+      const error = chrome.runtime.lastError
+      if (error) {
+        reject(new Error(error.message))
+        return
+      }
+
+      resolve()
+    })
+  })
+}
+
+function formatElapsedTime(elapsedMs: number): string {
+  const totalSeconds = Math.round(Math.max(0, elapsedMs) / 1000)
+  if (!totalSeconds) {
+    return ''
+  }
+
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (!minutes) {
+    return `${seconds} 秒`
+  }
+  if (!seconds) {
+    return `${minutes} 分钟`
+  }
+  return `${minutes} 分 ${seconds} 秒`
 }
 
 async function retryAiNamingBookmarks(retryCandidates, settings = aiNamingManagerState.settings) {
@@ -3305,6 +4011,7 @@ async function generateAiNamingResultForBookmark(bookmark, settings = aiNamingMa
 function commitAiNamingResult(bookmark, modelItem, settings = aiNamingManagerState.settings, preparedItem = null) {
   const nextResult = buildAiNamingResultFromModelItem(bookmark, modelItem, preparedItem)
   upsertAiNamingResult(nextResult)
+  persistAiNamingTagRecord(bookmark, nextResult, settings, preparedItem)
 
   if (
     nextResult.status === 'suggested' &&
@@ -3337,7 +4044,8 @@ function buildAiNamingResultFromModelItem(bookmark, modelItem, preparedItem = nu
     contentType: normalizeAiResultText(modelItem.contentType || preparedItem?.pageContext?.content_type, 80),
     topics: normalizeAiResultTextList(modelItem.topics, 8, 48),
     suggestedFolder: normalizeAiResultText(modelItem.suggestedFolder, 180),
-    tags: normalizeAiResultTextList(modelItem.tags, 10, 40),
+    tags: normalizeBookmarkTags(modelItem.tags),
+    aliases: normalizeAiResultTextList(modelItem.aliases, 20, 40),
     extractionStatus: String(preparedItem?.pageContext?.extraction?.status || ''),
     extractionSource: String(preparedItem?.pageContext?.extraction?.source || ''),
     extractionWarnings: Array.isArray(preparedItem?.pageContext?.extraction?.warnings)
@@ -3352,6 +4060,52 @@ function buildAiNamingResultFromModelItem(bookmark, modelItem, preparedItem = nu
     parentId: bookmark.parentId,
     index: bookmark.index
   }
+}
+
+function persistAiNamingTagRecord(bookmark, result, settings = aiNamingManagerState.settings, preparedItem = null) {
+  upsertBookmarkTagFromAnalysis({
+    bookmark: {
+      id: bookmark.id,
+      title: result.suggestedTitle || bookmark.title,
+      url: bookmark.url,
+      path: bookmark.path
+    },
+    analysis: {
+      summary: result.summary,
+      contentType: result.contentType,
+      topics: result.topics,
+      tags: result.tags,
+      aliases: result.aliases,
+      confidence: result.confidenceScore,
+      extraction: {
+        status: result.extractionStatus,
+        source: result.extractionSource,
+        warnings: result.extractionWarnings
+      }
+    },
+    source: 'ai_naming',
+    model: settings.model,
+    extraction: {
+      status: String(preparedItem?.pageContext?.extraction?.status || result.extractionStatus || ''),
+      source: String(preparedItem?.pageContext?.extraction?.source || result.extractionSource || ''),
+      warnings: Array.isArray(result.extractionWarnings) ? result.extractionWarnings : []
+    }
+  }).then((record) => {
+    if (record) {
+      aiNamingState.tagIndex = normalizeBookmarkTagIndex({
+        ...aiNamingState.tagIndex,
+        updatedAt: Date.now(),
+        records: {
+          ...aiNamingState.tagIndex.records,
+          [record.bookmarkId]: record
+        }
+      })
+      renderBookmarkTagDataCard()
+    }
+  }).catch((error) => {
+    aiNamingState.tagDataStatus = error instanceof Error ? error.message : '标签数据写入失败。'
+    renderAiNamingSection()
+  })
 }
 
 function buildAiNamingRetriedFailureResult(bookmark, initialError, retryError) {
@@ -3659,7 +4413,11 @@ function getDefaultAiNamingSystemPrompt() {
     '不要凭空补充页面中没有出现的实体、结论、时间或用途。',
     'summary 要概括页面主要内容；content_type 从文档、博客、论文、工具、新闻、GitHub 项目、视频、商品页、论坛、登录页、网页中选择最贴近的一类。',
     'suggested_folder 优先从 existing_folders 中选择；如果都明显不合适，可以给出一个简短的新文件夹建议。',
-    'topics 和 tags 要短，适合用户筛选和回忆，不要超过输入内容能支持的范围。',
+    'topics 是主题归类，可稍长；tags 是界面展示和筛选用短标签，必须短、原子、稳定。',
+    'tags 规则：每个 tag 只表达一个概念；中文优先 2-6 个字，英文优先 1-3 个词；通常输出 4-8 个高价值 tag。',
+    '禁止把句子、标题、描述、多个概念组合成 tag；如果包含“与、和、及、逗号或斜杠”等多个概念，请拆成多个短 tag。',
+    '好的 tags 示例：["AI", "LLM", "网关", "API", "OpenAI 兼容"]；坏的 tags 示例：["一个支持 OpenAI Claude Gemini 的 API 聚合网关", "效率工具与网络技术博客"]。',
+    'aliases 只负责语义别名、简称、英文名、中文名或常见叫法；不要输出拼音全拼或首字母，拼音索引会由本地程序生成。',
     'confidence 必须是 0 到 1 的数字。内容不足、抽取状态为 limited/fallback/failed、或判断依赖 URL 猜测时要降低 confidence。',
     `建议标题应尽量精炼，通常不超过 ${AI_NAMING_MAX_TEXT_LENGTH} 个字符。`,
     '如果当前标题已经足够清晰、稳定且适合检索，请返回 keep。',
@@ -3673,7 +4431,7 @@ function getDefaultAiNamingSystemPrompt() {
 function buildAiNamingUserPrompt(preparedItems) {
   const payload = preparedItems.map((item) => item.requestItem)
   return [
-    '请逐条理解这些书签页面，判断用途、主题、内容类型、推荐标题和推荐文件夹，并返回结构化结果。',
+    '请逐条理解这些书签页面，先基于网页内容生成摘要、主题、标签和语义别名，再判断推荐标题和推荐文件夹，并返回结构化结果。',
     '优先语言：与页面标题的主要语言保持一致；若信息不足，则保留当前标题或标记为 manual_review，并降低 confidence。',
     '输入数据如下：',
     JSON.stringify({ items: payload }, null, 2)
@@ -3706,7 +4464,8 @@ function normalizeAiNamingResponseItems(payload, preparedItems) {
         topics: normalizeAiResultTextList(item?.topics, 8, 48),
         suggestedTitle: cleanAiSuggestedTitle(item?.suggested_title),
         suggestedFolder: normalizeAiResultText(item?.suggested_folder, 180),
-        tags: normalizeAiResultTextList(item?.tags, 10, 40),
+        tags: normalizeBookmarkTags(item?.tags),
+        aliases: normalizeAiResultTextList(item?.aliases, 20, 40),
         confidence: normalizeAiConfidence(item?.confidence),
         confidenceScore: normalizeAiConfidenceScore(item?.confidence),
         reason: String(item?.reason || '').replace(/\s+/g, ' ').trim()
@@ -3951,7 +4710,7 @@ function renderAvailabilityScopeControls() {
     {
       disabled: aiNamingState.running || aiNamingState.applying || availabilityState.catalogLoading,
       label: aiScopeMeta.label,
-      copy: `当前范围：${aiScopeMeta.label}。AI 命名只会抓取该范围里的 http/https 书签，并基于网页元信息生成标题建议。`
+      copy: `当前范围：${aiScopeMeta.label}。AI 标签与命名只会读取该范围里的 http/https 书签，并基于网页内容生成标签和标题建议。`
     }
   )
 }
@@ -3987,7 +4746,7 @@ function renderScopeModal() {
     managerState.scopeModalSource === 'history'
       ? '历史范围'
       : managerState.scopeModalSource === 'ai'
-        ? 'AI 命名范围'
+        ? 'AI 标签与命名范围'
         : '检测范围'
   const normalizedQuery = normalizeText(managerState.scopeSearchQuery)
   const folders = availabilityState.allFolders
@@ -4001,7 +4760,7 @@ function renderScopeModal() {
     .sort((left, right) => compareByPathTitle(left, right))
 
   dom.scopeModalCopy.textContent = managerState.scopeModalSource === 'ai'
-    ? '请选择一个文件夹作为当前 AI 命名范围，支持搜索文件夹名称或路径；选择后会立即更新可处理书签列表。'
+    ? '请选择一个文件夹作为当前 AI 标签与命名范围，支持搜索文件夹名称或路径；选择后会立即更新可处理书签列表。'
     : `请选择一个文件夹作为当前${sourceLabel}，支持搜索文件夹名称或路径；选择后会立即更新可用性检测与历史记录视图。`
   dom.scopeSearchInput.value = managerState.scopeSearchQuery
 

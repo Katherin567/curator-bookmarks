@@ -30,6 +30,7 @@ import {
 } from '../shared/recycle-bin.js'
 import { getLocalStorage, removeLocalStorage } from '../shared/storage.js'
 import { requestBookmarkSave } from '../shared/messages.js'
+import { loadBookmarkTagIndex, normalizeBookmarkTags } from '../shared/bookmark-tags.js'
 import { renderDotMatrixLoader } from '../shared/dot-matrix-loader.js'
 import {
   extractAiErrorMessage,
@@ -72,10 +73,27 @@ const SMART_LOADING_STEP_COUNT = 3
 const SMART_CLASSIFY_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['title', 'summary', 'existing_folders', 'new_folder'],
+  required: ['title', 'summary', 'content_type', 'topics', 'tags', 'aliases', 'confidence', 'existing_folders', 'new_folder'],
   properties: {
-    title: { type: 'string' },
-    summary: { type: 'string' },
+    title: { type: 'string', maxLength: 80 },
+    summary: { type: 'string', maxLength: 500 },
+    content_type: { type: 'string', maxLength: 40 },
+    topics: {
+      type: 'array',
+      maxItems: 8,
+      items: { type: 'string', maxLength: 40 }
+    },
+    tags: {
+      type: 'array',
+      maxItems: 12,
+      items: { type: 'string', maxLength: 24 }
+    },
+    aliases: {
+      type: 'array',
+      maxItems: 20,
+      items: { type: 'string', maxLength: 40 }
+    },
+    confidence: { type: 'number', minimum: 0, maximum: 1 },
     existing_folders: {
       type: 'array',
       items: {
@@ -257,7 +275,11 @@ async function refreshData({ initial = false, preserveSearch = true } = {}) {
     state.bookmarksBarNode = findBookmarksBar(rootNode)
 
     const extracted = extractBookmarkData(rootNode)
-    const indexedBookmarks = extracted.bookmarks.map(indexBookmarkForSearch)
+    const tagIndex = await loadBookmarkTagIndex().catch(() => null)
+    const tagRecords = tagIndex?.records || {}
+    const indexedBookmarks = extracted.bookmarks.map((bookmark) => {
+      return indexBookmarkForSearch(bookmark, tagRecords[bookmark.id] || null)
+    })
     state.allBookmarks = indexedBookmarks
     state.allFolders = extracted.folders
     state.bookmarkMap = new Map(indexedBookmarks.map((bookmark) => [bookmark.id, bookmark]))
@@ -948,6 +970,9 @@ function renderSearchResults() {
   return state.searchResults
     .map((bookmark, index) => {
       const isActive = index === state.activeResultIndex
+      const matchReason = Array.isArray(bookmark.matchReasons) && bookmark.matchReasons.length
+        ? bookmark.matchReasons.join(' · ')
+        : ''
 
       return `
         <article class="result-card ${isActive ? 'active' : ''}" data-result-index="${index}">
@@ -962,6 +987,9 @@ function renderSearchResults() {
                   title="${escapeAttr(bookmark.path || '未归档路径')}"
                 >${escapeHtml(bookmark.path || '未归档路径')}</span>
               </span>
+              ${matchReason
+                ? `<span class="result-match-reason" title="${escapeAttr(matchReason)}">${escapeHtml(matchReason)}</span>`
+                : ''}
             </span>
           </button>
           <div class="menu-anchor">
@@ -1729,6 +1757,13 @@ function resetSmartClassification() {
   state.smartProgressPercent = 0
   state.smartSuggestedTitle = ''
   state.smartSummary = ''
+  state.smartContentType = ''
+  state.smartTopics = []
+  state.smartTags = []
+  state.smartAliases = []
+  state.smartConfidence = 0
+  state.smartModel = ''
+  state.smartExtraction = { status: '', source: '', warnings: [] }
   state.smartRecommendations = []
   state.smartSelectedRecommendationId = ''
   state.smartSaving = false
@@ -1758,6 +1793,13 @@ async function classifyCurrentPage({ requestMissingPermissions = false } = {}) {
   state.smartSelectedRecommendationId = ''
   state.smartSaved = false
   state.smartSuggestedTitle = getCurrentPageTitle()
+  state.smartContentType = ''
+  state.smartTopics = []
+  state.smartTags = []
+  state.smartAliases = []
+  state.smartConfidence = 0
+  state.smartModel = ''
+  state.smartExtraction = { status: '', source: '', warnings: [] }
   state.smartPermissionRequest = null
   renderSmartClassifier()
 
@@ -1790,6 +1832,13 @@ async function classifyCurrentPage({ requestMissingPermissions = false } = {}) {
     const recommendations = buildSmartRecommendations(aiResult)
     state.smartSuggestedTitle = cleanSmartTitle(aiResult.title || getCurrentPageTitle())
     state.smartSummary = cleanSmartText(aiResult.summary, 360)
+    state.smartContentType = cleanSmartText(aiResult.contentType, 80)
+    state.smartTopics = normalizeSmartTextList(aiResult.topics, 8, 40)
+    state.smartTags = normalizeBookmarkTags(aiResult.tags)
+    state.smartAliases = normalizeSmartTextList(aiResult.aliases, 20, 40)
+    state.smartConfidence = normalizeSmartConfidence(aiResult.confidence)
+    state.smartModel = settings.model
+    state.smartExtraction = buildSmartExtractionSnapshot(pageContext)
     state.smartRecommendations = recommendations
     state.smartSelectedRecommendationId = recommendations[0]?.id || ''
     state.smartStatus = 'results'
@@ -1901,7 +1950,17 @@ async function saveCurrentPageViaWorker({ parentId = '', folderPath = '' } = {},
       folderPath,
       bookmarkId: existingBookmark?.id || state.currentPageBookmarkId || '',
       title: nextTitle,
-      url: currentUrl
+      url: currentUrl,
+      analysis: {
+        summary: state.smartSummary,
+        contentType: state.smartContentType,
+        topics: state.smartTopics,
+        tags: state.smartTags,
+        aliases: state.smartAliases,
+        confidence: state.smartConfidence,
+        model: state.smartModel,
+        extraction: state.smartExtraction
+      }
     })
 
     state.smartSaving = false
@@ -2269,6 +2328,12 @@ function buildSmartAiRequestBody({ settings, pageContext, currentUrl }) {
     'existing_folders 数组只能填写输入中存在的 folder_path，不要编造已有文件夹。',
     'new_folder 只能作为最后的备用建议，路径要短，适合用户新建。',
     'title 要适合作为浏览器书签标题，简短清晰，不要包含无意义站点后缀。',
+    'summary、content_type、topics、tags、aliases 用于本地搜索标签库：summary 概括页面内容，content_type 选择最贴近的内容类型。',
+    'topics 是主题归类，可稍长；tags 是界面展示和筛选用短标签，必须短、原子、稳定。',
+    'tags 规则：每个 tag 只表达一个概念；中文优先 2-6 个字，英文优先 1-3 个词；通常输出 4-8 个高价值 tag。',
+    '禁止把句子、标题、描述、多个概念组合成 tag；如果包含“与、和、及、逗号或斜杠”等多个概念，请拆成多个短 tag。',
+    '好的 tags 示例：["AI", "LLM", "网关", "API", "OpenAI 兼容"]；坏的 tags 示例：["一个支持 OpenAI Claude Gemini 的 API 聚合网关", "效率工具与网络技术博客"]。',
+    'aliases 只输出语义别名、简称、英文名、中文名或常见叫法；不要输出拼音全拼或首字母。',
     'confidence 必须是 0 到 1 的数字。'
   ].join('\n')
   const userPrompt = JSON.stringify({
@@ -2446,6 +2511,11 @@ function normalizeSmartAiResult(payload) {
   return {
     title: cleanSmartTitle(payload?.title || getCurrentPageTitle()),
     summary: cleanSmartText(payload?.summary, 360),
+    contentType: cleanSmartText(payload?.content_type, 80),
+    topics: normalizeSmartTextList(payload?.topics, 8, 40),
+    tags: normalizeBookmarkTags(payload?.tags),
+    aliases: normalizeSmartTextList(payload?.aliases, 20, 40),
+    confidence: normalizeSmartConfidence(payload?.confidence),
     existingFolders: existingFolders
       .map((item) => ({
         folderPath: cleanSmartText(item?.folder_path, 240),
@@ -2458,6 +2528,39 @@ function normalizeSmartAiResult(payload) {
       reason: cleanSmartText(payload?.new_folder?.reason, 180),
       confidence: normalizeSmartConfidence(payload?.new_folder?.confidence)
     }
+  }
+}
+
+function normalizeSmartTextList(value, limit, itemLimit) {
+  const values = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(/[,，、\n]/)
+      : []
+  const seen = new Set()
+  const output = []
+
+  for (const item of values) {
+    const text = cleanSmartText(item, itemLimit)
+    const key = normalizeText(text)
+    if (!text || seen.has(key)) {
+      continue
+    }
+    seen.add(key)
+    output.push(text)
+    if (output.length >= limit) {
+      break
+    }
+  }
+
+  return output
+}
+
+function buildSmartExtractionSnapshot(pageContext) {
+  return {
+    status: cleanSmartText(pageContext?.extractionStatus, 40),
+    source: cleanSmartText(pageContext?.source, 80),
+    warnings: normalizeSmartTextList(pageContext?.warnings, 4, 40)
   }
 }
 

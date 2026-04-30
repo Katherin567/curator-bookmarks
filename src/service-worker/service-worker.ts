@@ -11,6 +11,12 @@ import { BOOKMARK_ADD_HISTORY_LIMIT, STORAGE_KEYS } from '../shared/constants.js
 import { getLocalStorage, setLocalStorage } from '../shared/storage.js'
 import { extractDomain } from '../shared/text.js'
 import {
+  normalizeBookmarkTagConfidence,
+  normalizeBookmarkTags,
+  removeBookmarkTagRecord,
+  upsertBookmarkTagFromAnalysis
+} from '../shared/bookmark-tags.js'
+import {
   extractAiErrorMessage,
   extractChatCompletionsJsonText,
   extractResponsesJsonText,
@@ -62,6 +68,11 @@ interface AutoClassifySuggestion {
 interface AutoClassifyResult {
   title: string
   summary: string
+  contentType: string
+  topics: string[]
+  tags: string[]
+  aliases: string[]
+  confidence: number
   existingFolders: AutoClassifySuggestion[]
   newFolder: AutoClassifySuggestion
 }
@@ -123,10 +134,27 @@ const AUTO_ANALYZE_QUEUE_RETRY_MS = 45000
 const AUTO_CLASSIFY_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['title', 'summary', 'existing_folders', 'new_folder'],
+  required: ['title', 'summary', 'content_type', 'topics', 'tags', 'aliases', 'confidence', 'existing_folders', 'new_folder'],
   properties: {
-    title: { type: 'string' },
-    summary: { type: 'string' },
+    title: { type: 'string', maxLength: 80 },
+    summary: { type: 'string', maxLength: 500 },
+    content_type: { type: 'string', maxLength: 40 },
+    topics: {
+      type: 'array',
+      maxItems: 8,
+      items: { type: 'string', maxLength: 40 }
+    },
+    tags: {
+      type: 'array',
+      maxItems: 12,
+      items: { type: 'string', maxLength: 24 }
+    },
+    aliases: {
+      type: 'array',
+      maxItems: 20,
+      items: { type: 'string', maxLength: 40 }
+    },
+    confidence: { type: 'number', minimum: 0, maximum: 1 },
     existing_folders: {
       type: 'array',
       items: {
@@ -214,6 +242,12 @@ chrome.bookmarks.onCreated.addListener((bookmarkId, node) => {
   }
 
   void handleBookmarkCreatedForAutoAnalysis(String(bookmarkId), node)
+})
+
+chrome.bookmarks.onRemoved.addListener((bookmarkId) => {
+  removeBookmarkTagRecord(bookmarkId).catch((error) => {
+    console.warn('[Curator] 标签记录清理失败', error)
+  })
 })
 
 chrome.webNavigation.onCommitted.addListener((details) => {
@@ -406,6 +440,29 @@ async function runAutoAnalysisForBookmark(bookmarkId: string): Promise<void> {
       console.warn('[Curator] 自动分析书签改名失败', error)
     }
   }
+
+  upsertBookmarkTagFromAnalysis({
+    bookmark: {
+      id: bookmarkId,
+      title: finalBookmarkTitle,
+      url: bookmark.url,
+      path: recommendation.path || recommendation.title
+    },
+    analysis: {
+      summary: aiResult.summary,
+      contentType: aiResult.contentType,
+      topics: aiResult.topics,
+      tags: aiResult.tags,
+      aliases: aiResult.aliases,
+      confidence: aiResult.confidence,
+      extraction: buildAutoExtractionSnapshot(pageContext)
+    },
+    source: 'auto_analyze',
+    model: settings.model,
+    extraction: buildAutoExtractionSnapshot(pageContext)
+  }).catch((error) => {
+    console.warn('[Curator] 自动分析标签写入失败', error)
+  })
 
   appendBookmarkAddHistory({
     id: `bookmark-add-${Date.now()}-${bookmarkId}`,
@@ -900,6 +957,12 @@ function buildAutoClassifyRequestBody({
     '返回 existing_folders 时必须原样带回候选中的 folder_id；folder_path 也尽量原样复制候选值。',
     'new_folder 只能作为没有合适已有文件夹时的备用建议，路径要短，适合用户新建。',
     'title 要适合作为浏览器书签标题，简短清晰，不要包含无意义站点后缀。',
+    'summary、content_type、topics、tags、aliases 用于本地搜索标签库：summary 概括页面内容，content_type 选择最贴近的内容类型。',
+    'topics 是主题归类，可稍长；tags 是界面展示和筛选用短标签，必须短、原子、稳定。',
+    'tags 规则：每个 tag 只表达一个概念；中文优先 2-6 个字，英文优先 1-3 个词；通常输出 4-8 个高价值 tag。',
+    '禁止把句子、标题、描述、多个概念组合成 tag；如果包含“与、和、及、逗号或斜杠”等多个概念，请拆成多个短 tag。',
+    '好的 tags 示例：["AI", "LLM", "网关", "API", "OpenAI 兼容"]；坏的 tags 示例：["一个支持 OpenAI Claude Gemini 的 API 聚合网关", "效率工具与网络技术博客"]。',
+    'aliases 只输出语义别名、简称、英文名、中文名或常见叫法；不要输出拼音全拼或首字母。',
     'confidence 必须是 0 到 1 的数字。'
   ].join('\n')
   const userPrompt = JSON.stringify({
@@ -1112,6 +1175,11 @@ function normalizeAutoAiResult(payload: any): AutoClassifyResult {
   return {
     title: cleanText(payload?.title || ''),
     summary: cleanText(payload?.summary || ''),
+    contentType: cleanText(payload?.content_type || ''),
+    topics: normalizeAutoTextList(payload?.topics, 8, 40),
+    tags: normalizeBookmarkTags(payload?.tags),
+    aliases: normalizeAutoTextList(payload?.aliases, 20, 40),
+    confidence: normalizeAutoConfidence(payload?.confidence),
     existingFolders: existingFolders
       .map((item: any) => ({
         folderId: cleanText(item?.folder_id || ''),
@@ -1335,11 +1403,40 @@ function fetchWithAutoTimeout(
 }
 
 function normalizeAutoConfidence(value: unknown): number {
-  const numeric = Number(value)
-  if (Number.isFinite(numeric)) {
-    return Math.max(0, Math.min(numeric, 1))
+  return normalizeBookmarkTagConfidence(value)
+}
+
+function normalizeAutoTextList(value: unknown, limit: number, itemLimit: number): string[] {
+  const values = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(/[,，、\n]/)
+      : []
+  const seen = new Set<string>()
+  const output: string[] = []
+
+  for (const item of values) {
+    const text = truncateText(item, itemLimit)
+    const key = normalizeText(text)
+    if (!text || seen.has(key)) {
+      continue
+    }
+    seen.add(key)
+    output.push(text)
+    if (output.length >= limit) {
+      break
+    }
   }
-  return 0
+
+  return output
+}
+
+function buildAutoExtractionSnapshot(pageContext: PageContentContext) {
+  return {
+    status: cleanText(pageContext?.extractionStatus || ''),
+    source: cleanText(pageContext?.source || ''),
+    warnings: normalizeAutoTextList(pageContext?.warnings, 4, 40)
+  }
 }
 
 function normalizeAutoFolderPath(value: unknown): string {
@@ -1446,13 +1543,17 @@ async function saveBookmarkFromMessage(message: BookmarkSaveMessage): Promise<Bo
         node = await updateBookmarkNode(bookmarkId, { title })
       }
 
-      return {
+      const result = {
         bookmarkId: String(node.id),
         parentId: String(node.parentId || parentId),
         title: String(node.title || title),
         url: String(node.url || url),
         created: false
       }
+      persistPopupSmartTagAnalysis(message, result).catch((error) => {
+        console.warn('[Curator] Popup 智能分类标签写入失败', error)
+      })
+      return result
     }
   }
 
@@ -1463,13 +1564,43 @@ async function saveBookmarkFromMessage(message: BookmarkSaveMessage): Promise<Bo
     url
   })
 
-  return {
+  const result = {
     bookmarkId: String(createdNode.id),
     parentId: String(createdNode.parentId || parentId),
     title: String(createdNode.title || title),
     url: String(createdNode.url || url),
     created: true
   }
+  persistPopupSmartTagAnalysis(message, result).catch((error) => {
+    console.warn('[Curator] Popup 智能分类标签写入失败', error)
+  })
+  return result
+}
+
+async function persistPopupSmartTagAnalysis(
+  message: BookmarkSaveMessage,
+  result: BookmarkSaveResult
+): Promise<void> {
+  if (!message.analysis) {
+    return
+  }
+
+  const path = message.folderPath
+    ? cleanText(message.folderPath)
+    : await getBookmarkFolderPath(result.parentId)
+
+  await upsertBookmarkTagFromAnalysis({
+    bookmark: {
+      id: result.bookmarkId,
+      title: result.title,
+      url: result.url,
+      path
+    },
+    analysis: message.analysis,
+    source: 'popup_smart',
+    model: message.analysis.model,
+    extraction: message.analysis.extraction
+  })
 }
 
 async function ensureBookmarkFolderPath(path: string): Promise<string> {
@@ -1519,6 +1650,17 @@ async function getBookmarksBarNode(): Promise<chrome.bookmarks.BookmarkTreeNode>
   }
 
   return bookmarksBar || fallback!
+}
+
+async function getBookmarkFolderPath(parentId: string): Promise<string> {
+  try {
+    const tree = await getBookmarkTree()
+    const rootNode = Array.isArray(tree) ? tree[0] : tree
+    const extracted = extractBookmarkData(rootNode)
+    return extracted.folderMap.get(String(parentId || ''))?.path || ''
+  } catch {
+    return ''
+  }
 }
 
 function getBookmarkTree(): Promise<chrome.bookmarks.BookmarkTreeNode[]> {

@@ -16,7 +16,8 @@ export const STORAGE_KEYS = {
   newTabFolderSettings: 'curatorBookmarkNewTabFolderSettings',
   redirectCache: 'curatorBookmarkRedirectCache',
   recycleBin: 'curatorBookmarkRecycleBin',
-  aiProviderSettings: 'curatorBookmarkAiNamingSettings'
+  aiProviderSettings: 'curatorBookmarkAiNamingSettings',
+  bookmarkTagIndex: 'curatorBookmarkTagIndex'
 } as const
 
 type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS]

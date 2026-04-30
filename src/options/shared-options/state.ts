@@ -154,6 +154,9 @@ export const aiNamingState = {
   filterStatus: 'all',
   filterConfidence: 'all',
   filterQuery: '',
+  expandedTagResultIds: new Set(),
+  pendingMoveResultIds: new Set(),
+  pendingMoveSelection: false,
   settingsDirty: false,
   testingConnection: false,
   fetchingModels: false,
@@ -177,6 +180,12 @@ export const aiNamingState = {
   failedCount: 0,
   results: [],
   selectedResultIds: new Set(),
+  tagIndex: {
+    version: 1,
+    updatedAt: 0,
+    records: {}
+  },
+  tagDataStatus: '',
   lastConnectivityTestAt: 0,
   lastConnectivityTestStatus: '',
   lastConnectivityTestMessage: '',

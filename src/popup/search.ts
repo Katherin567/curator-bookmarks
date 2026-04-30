@@ -1,5 +1,7 @@
+import { pinyin } from 'pinyin-pro'
 import type { BookmarkRecord } from '../shared/types.js'
 import { normalizeText, stripCommonUrlPrefix } from '../shared/text.js'
+import type { BookmarkTagRecord } from '../shared/bookmark-tags.js'
 
 export const MAX_POPUP_SEARCH_RESULTS = 20
 export const POPUP_SEARCH_ASYNC_THRESHOLD = 1200
@@ -8,11 +10,19 @@ const SEARCH_CHUNK_SIZE = 260
 
 export interface PopupSearchBookmark extends BookmarkRecord {
   normalizedPath: string
+  tagSummary: string
+  tagContentType: string
+  tagTopics: string[]
+  tagTags: string[]
+  tagAliases: string[]
+  tagPinyinFull: string[]
+  tagPinyinInitials: string[]
   searchText: string
 }
 
 export interface PopupSearchResult extends PopupSearchBookmark {
   score: number
+  matchReasons: string[]
 }
 
 export interface CooperativeSearchOptions {
@@ -20,17 +30,44 @@ export interface CooperativeSearchOptions {
   yieldWork?: () => Promise<unknown>
 }
 
-export function indexBookmarkForSearch(bookmark: BookmarkRecord): PopupSearchBookmark {
+export function indexBookmarkForSearch(bookmark: BookmarkRecord, tagRecord: BookmarkTagRecord | null = null): PopupSearchBookmark {
   const normalizedPath = normalizeText(bookmark.path || '')
   const normalizedDomain = normalizeText(bookmark.domain || '')
+  const tagSummary = normalizeText(tagRecord?.summary || '')
+  const tagContentType = normalizeText(tagRecord?.contentType || '')
+  const tagTopics = normalizeSearchList(tagRecord?.topics)
+  const tagTags = normalizeSearchList(tagRecord?.tags)
+  const tagAliases = normalizeSearchList(tagRecord?.aliases)
+  const pinyinTokens = buildPinyinSearchTokens([
+    bookmark.title,
+    bookmark.path,
+    ...(tagRecord?.topics || []),
+    ...(tagRecord?.tags || []),
+    ...(tagRecord?.aliases || [])
+  ])
+
   return {
     ...bookmark,
     normalizedPath,
+    tagSummary,
+    tagContentType,
+    tagTopics,
+    tagTags,
+    tagAliases,
+    tagPinyinFull: pinyinTokens.full,
+    tagPinyinInitials: pinyinTokens.initials,
     searchText: [
       bookmark.normalizedTitle,
       bookmark.normalizedUrl,
       normalizedPath,
-      normalizedDomain
+      normalizedDomain,
+      tagContentType,
+      ...tagTopics,
+      ...tagTags,
+      ...tagAliases,
+      ...pinyinTokens.full,
+      ...pinyinTokens.initials,
+      tagSummary
     ]
       .filter(Boolean)
       .join(' ')
@@ -47,9 +84,13 @@ export function searchBookmarks(
   const results: PopupSearchResult[] = []
 
   for (const bookmark of candidates) {
-    const score = scoreBookmark(bookmark, normalizedQuery, queryTerms)
-    if (score > 0) {
-      appendTopSearchResult(results, { ...bookmark, score })
+    const match = scoreBookmarkWithReasons(bookmark, normalizedQuery, queryTerms)
+    if (match.score > 0) {
+      appendTopSearchResult(results, {
+        ...bookmark,
+        score: match.score,
+        matchReasons: match.reasons
+      })
     }
   }
 
@@ -76,9 +117,13 @@ export async function searchBookmarksCooperatively(
     const chunk = candidates.slice(index, index + SEARCH_CHUNK_SIZE)
 
     for (const bookmark of chunk) {
-      const score = scoreBookmark(bookmark, normalizedQuery, queryTerms)
-      if (score > 0) {
-        appendTopSearchResult(results, { ...bookmark, score })
+      const match = scoreBookmarkWithReasons(bookmark, normalizedQuery, queryTerms)
+      if (match.score > 0) {
+        appendTopSearchResult(results, {
+          ...bookmark,
+          score: match.score,
+          matchReasons: match.reasons
+        })
       }
     }
 
@@ -103,39 +148,60 @@ export function scoreBookmark(
   normalizedQuery: string,
   queryTerms: string[]
 ): number {
+  return scoreBookmarkWithReasons(bookmark, normalizedQuery, queryTerms).score
+}
+
+function scoreBookmarkWithReasons(
+  bookmark: PopupSearchBookmark,
+  normalizedQuery: string,
+  queryTerms: string[]
+): { score: number; reasons: string[] } {
   const title = bookmark.normalizedTitle
   const url = bookmark.normalizedUrl
+  const domain = normalizeText(bookmark.domain || '')
   let score = 0
   let matched = false
+  const reasons: string[] = []
 
   if (!normalizedQuery) {
-    return 0
+    return { score: 0, reasons: [] }
   }
 
   if (title === normalizedQuery) {
     score += 620
     matched = true
+    addReason(reasons, `命中：标题 ${bookmark.title}`)
   }
 
   if (title.startsWith(normalizedQuery)) {
     score += 420
     matched = true
+    addReason(reasons, `命中：标题前缀 ${normalizedQuery}`)
   }
 
   const titleIndex = title.indexOf(normalizedQuery)
   if (titleIndex !== -1) {
     score += 300 - Math.min(titleIndex, 120)
     matched = true
+    addReason(reasons, `命中：标题 ${normalizedQuery}`)
   }
 
-  if (url.startsWith(normalizedQuery)) {
+  if (url.startsWith(normalizedQuery) || domain.startsWith(normalizedQuery)) {
     score += 250
     matched = true
+    addReason(reasons, `命中：网址 ${normalizedQuery}`)
   }
 
-  const urlIndex = url.indexOf(normalizedQuery)
+  const urlIndex = Math.max(url.indexOf(normalizedQuery), domain.indexOf(normalizedQuery))
   if (urlIndex !== -1) {
     score += 190 - Math.min(urlIndex, 100)
+    matched = true
+    addReason(reasons, `命中：网址 ${normalizedQuery}`)
+  }
+
+  const semanticMatch = scoreSemanticFields(bookmark, normalizedQuery, queryTerms, reasons)
+  if (semanticMatch.score > 0) {
+    score += semanticMatch.score
     matched = true
   }
 
@@ -150,12 +216,21 @@ export function scoreBookmark(
       score += 72 - Math.min(termTitleIndex, 40)
       termMatched = true
       matched = true
+      addReason(reasons, `命中：标题 ${term}`)
     }
 
     if (termUrlIndex !== -1) {
       score += 45 - Math.min(termUrlIndex, 40)
       termMatched = true
       matched = true
+      addReason(reasons, `命中：网址 ${term}`)
+    }
+
+    if (
+      !termMatched &&
+      termMatchedSemanticField(bookmark, term)
+    ) {
+      termMatched = true
     }
 
     if (!termMatched) {
@@ -174,6 +249,7 @@ export function scoreBookmark(
   if (fuzzyScore > 0) {
     score += fuzzyScore
     matched = true
+    addReason(reasons, `命中：模糊匹配 ${normalizedQuery}`)
   }
 
   if (title.includes(normalizedQuery) && url.includes(normalizedQuery)) {
@@ -182,7 +258,194 @@ export function scoreBookmark(
 
   score -= Math.floor(bookmark.title.length / 28)
 
-  return matched ? Math.max(score, 0) : 0
+  return {
+    score: matched ? Math.max(score, 0) : 0,
+    reasons: reasons.slice(0, 3)
+  }
+}
+
+function scoreSemanticFields(
+  bookmark: PopupSearchBookmark,
+  normalizedQuery: string,
+  queryTerms: string[],
+  reasons: string[]
+): { score: number } {
+  let score = 0
+  const summaryEnabled = shouldUseSummaryForQuery(normalizedQuery)
+  const terms = queryTerms.length ? queryTerms : [normalizedQuery]
+
+  score += scoreListField(bookmark.tagAliases, normalizedQuery, terms, 65, (label) => {
+    addReason(reasons, `命中：别名 ${label}`)
+  })
+  score += scoreListField(bookmark.tagTags, normalizedQuery, terms, 60, (labels) => {
+    addReason(reasons, `标签：${labels}`)
+  })
+  score += scoreListField(bookmark.tagTopics, normalizedQuery, terms, 50, (labels) => {
+    addReason(reasons, `主题：${labels}`)
+  })
+  score += scoreTextField(bookmark.normalizedPath, normalizedQuery, terms, 40, () => {
+    addReason(reasons, `命中：文件夹 ${bookmark.path || ''}`.trim())
+  })
+  score += scoreTextField(bookmark.tagContentType, normalizedQuery, terms, 10, () => {
+    addReason(reasons, `命中：类型 ${bookmark.tagContentType}`)
+  })
+  score += scoreListField(bookmark.tagPinyinInitials, normalizedQuery, terms, 58, () => {
+    addReason(reasons, `命中：首字母 ${normalizedQuery}`)
+  })
+  score += scoreListField(bookmark.tagPinyinFull, normalizedQuery, terms, 52, () => {
+    addReason(reasons, `命中：拼音 ${normalizedQuery}`)
+  })
+
+  if (summaryEnabled) {
+    score += scoreTextField(bookmark.tagSummary, normalizedQuery, terms, 22, () => {
+      addReason(reasons, `命中：摘要 ${normalizedQuery}`)
+    })
+  }
+
+  return { score }
+}
+
+function scoreListField(
+  values: string[],
+  normalizedQuery: string,
+  queryTerms: string[],
+  weight: number,
+  onMatch: (label: string) => void
+): number {
+  if (!values.length) {
+    return 0
+  }
+
+  let score = 0
+  const matchedLabels: string[] = []
+  for (const value of values) {
+    if (value === normalizedQuery) {
+      score += weight + 22
+      matchedLabels.push(value)
+    } else if (value.startsWith(normalizedQuery)) {
+      score += weight + 10
+      matchedLabels.push(value)
+    } else if (value.includes(normalizedQuery)) {
+      score += weight
+      matchedLabels.push(value)
+    } else {
+      const matchedTerms = queryTerms.filter((term) => value.includes(term))
+      if (matchedTerms.length) {
+        score += Math.round(weight * (matchedTerms.length / queryTerms.length))
+        matchedLabels.push(value)
+      }
+    }
+  }
+
+  if (matchedLabels.length) {
+    onMatch(matchedLabels.slice(0, 3).join(' / '))
+  }
+
+  return score
+}
+
+function scoreTextField(
+  value: string,
+  normalizedQuery: string,
+  queryTerms: string[],
+  weight: number,
+  onMatch: () => void
+): number {
+  if (!value) {
+    return 0
+  }
+
+  if (value === normalizedQuery) {
+    onMatch()
+    return weight + 16
+  }
+
+  if (value.startsWith(normalizedQuery)) {
+    onMatch()
+    return weight + 8
+  }
+
+  if (value.includes(normalizedQuery)) {
+    onMatch()
+    return weight
+  }
+
+  const matchedTerms = queryTerms.filter((term) => value.includes(term))
+  if (!matchedTerms.length) {
+    return 0
+  }
+
+  onMatch()
+  return Math.round(weight * (matchedTerms.length / queryTerms.length))
+}
+
+function termMatchedSemanticField(bookmark: PopupSearchBookmark, term: string): boolean {
+  return [
+    bookmark.normalizedPath,
+    bookmark.tagSummary,
+    bookmark.tagContentType,
+    ...bookmark.tagTopics,
+    ...bookmark.tagTags,
+    ...bookmark.tagAliases,
+    ...bookmark.tagPinyinFull,
+    ...bookmark.tagPinyinInitials
+  ].some((value) => value.includes(term))
+}
+
+function shouldUseSummaryForQuery(normalizedQuery: string): boolean {
+  if (normalizedQuery.length < 2) {
+    return false
+  }
+  return !/^[\u3400-\u9fff]$/u.test(normalizedQuery)
+}
+
+function normalizeSearchList(values: unknown): string[] {
+  if (!Array.isArray(values)) {
+    return []
+  }
+  return [...new Set(values.map((value) => normalizeText(value)).filter(Boolean))]
+}
+
+function buildPinyinSearchTokens(values: unknown[]): { full: string[]; initials: string[] } {
+  const full = new Set<string>()
+  const initials = new Set<string>()
+
+  for (const value of values) {
+    const text = String(value || '')
+    const matches = text.match(/[\u3400-\u9fff]+/gu) || []
+    for (const match of matches) {
+      const fullToken = buildPinyinToken(match, {})
+      const initialsToken = buildPinyinToken(match, { pattern: 'first' })
+      if (fullToken) {
+        full.add(fullToken)
+      }
+      if (initialsToken) {
+        initials.add(initialsToken)
+      }
+    }
+  }
+
+  return {
+    full: [...full],
+    initials: [...initials]
+  }
+}
+
+function buildPinyinToken(text: string, options: Record<string, unknown>): string {
+  return normalizeText(
+    pinyin(text, {
+      toneType: 'none',
+      type: 'array',
+      ...options
+    }).join('')
+  )
+}
+
+function addReason(reasons: string[], reason: string): void {
+  const text = String(reason || '').replace(/\s+/g, ' ').trim()
+  if (text && !reasons.includes(text)) {
+    reasons.push(text)
+  }
 }
 
 function getSearchCandidates(

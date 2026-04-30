@@ -67,6 +67,13 @@ export interface PopupState {
   smartProgressPercent: number
   smartSuggestedTitle: string
   smartSummary: string
+  smartContentType: string
+  smartTopics: string[]
+  smartTags: string[]
+  smartAliases: string[]
+  smartConfidence: number
+  smartModel: string
+  smartExtraction: { status: string; source: string; warnings: string[] }
   smartRecommendations: PopupSmartRecommendation[]
   smartSelectedRecommendationId: string
   smartFolderPickerOpen: boolean
@@ -118,6 +125,13 @@ export const state: PopupState = {
   smartProgressPercent: 0,
   smartSuggestedTitle: '',
   smartSummary: '',
+  smartContentType: '',
+  smartTopics: [],
+  smartTags: [],
+  smartAliases: [],
+  smartConfidence: 0,
+  smartModel: '',
+  smartExtraction: { status: '', source: '', warnings: [] },
   smartRecommendations: [],
   smartSelectedRecommendationId: '',
   smartFolderPickerOpen: false,

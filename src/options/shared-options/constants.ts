@@ -16,8 +16,8 @@ export const SECTION_META = {
     title: '添加书签历史'
   },
   ai: {
-    label: 'AI Naming',
-    title: 'AI 智能命名'
+    label: 'AI Tags & Naming',
+    title: 'AI 标签与命名'
   },
   redirects: {
     label: 'Redirects',
@@ -79,6 +79,7 @@ export const AI_NAMING_RESPONSE_SCHEMA = {
           'suggested_title',
           'suggested_folder',
           'tags',
+          'aliases',
           'action',
           'confidence',
           'reason'
@@ -88,15 +89,19 @@ export const AI_NAMING_RESPONSE_SCHEMA = {
             type: 'string'
           },
           summary: {
-            type: 'string'
+            type: 'string',
+            maxLength: 500
           },
           content_type: {
-            type: 'string'
+            type: 'string',
+            maxLength: 40
           },
           topics: {
             type: 'array',
+            maxItems: 8,
             items: {
-              type: 'string'
+              type: 'string',
+              maxLength: 40
             }
           },
           action: {
@@ -104,15 +109,27 @@ export const AI_NAMING_RESPONSE_SCHEMA = {
             enum: ['rename', 'keep', 'manual_review']
           },
           suggested_title: {
-            type: 'string'
+            type: 'string',
+            maxLength: AI_NAMING_MAX_TEXT_LENGTH
           },
           suggested_folder: {
-            type: 'string'
+            type: 'string',
+            maxLength: 180
           },
           tags: {
             type: 'array',
+            maxItems: 12,
             items: {
-              type: 'string'
+              type: 'string',
+              maxLength: 24
+            }
+          },
+          aliases: {
+            type: 'array',
+            maxItems: 20,
+            items: {
+              type: 'string',
+              maxLength: 40
             }
           },
           confidence: {
