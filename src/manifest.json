@@ -65,9 +65,6 @@
       "description": "打开 Curator 并立即智能分类"
     },
     "curator-toggle-auto-analyze": {
-      "suggested_key": {
-        "default": "Alt+Shift+A"
-      },
       "description": "切换 Curator 自动分析"
     }
   },
