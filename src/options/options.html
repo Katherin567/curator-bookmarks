@@ -1181,14 +1181,14 @@
             aria-labelledby="folder-cleanup-title"
             hidden
           >
-            <p class="options-section-label">Folder Cleanup</p>
+            <p class="options-section-label">文件夹清理</p>
             <h1 id="folder-cleanup-title">文件夹清理</h1>
 
             <div class="options-group">
               <div class="option-row">
                 <div class="option-copy">
                   <strong>建议和预览优先</strong>
-                  <p>先扫描空文件夹、深层低价值文件夹、单一路径、同名文件夹和超大文件夹；删除、合并和移动都会在确认后执行，并先调用自动备份 hook。</p>
+                  <p>先重新读取当前 Chrome 书签树，再扫描空文件夹、深层低价值文件夹、单一路径、同名文件夹和超大文件夹；删除、合并、移动和拆分都会在确认后执行，并先调用自动备份 hook。拆分会记录本次移动，可在建议区撤销本次拆分。</p>
                 </div>
                 <div class="detect-results-actions">
                   <span id="folder-cleanup-status" class="options-chip muted">未扫描</span>

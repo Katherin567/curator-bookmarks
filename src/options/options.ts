@@ -170,6 +170,7 @@ import {
 import {
   hydrateFolderCleanupState,
   analyzeFolderCleanupSuggestions,
+  rescanFolderCleanupSuggestions,
   renderFolderCleanupSection,
   handleFolderCleanupClick,
   handleFolderCleanupPreviewClick
@@ -655,7 +656,7 @@ function bindEvents() {
   dom.duplicateClearSelection?.addEventListener('click', () => clearDuplicateSelection(duplicatesCallbacks))
   dom.duplicateDeleteSelection?.addEventListener('click', () => deleteSelectedDuplicates(duplicatesCallbacks))
   dom.folderCleanupAnalyze?.addEventListener('click', () => {
-    void analyzeFolderCleanupSuggestions(folderCleanupCallbacks)
+    void rescanFolderCleanupSuggestions(folderCleanupCallbacks)
   })
   dom.folderCleanupResults?.addEventListener('click', (event) => {
     handleFolderCleanupPreviewClick(event, folderCleanupCallbacks)
@@ -1032,7 +1033,7 @@ function getSelectedNewTabFolderIds(rawFolderSettings?: unknown): string[] {
     .filter(Boolean)
 }
 
-async function hydrateAvailabilityCatalog({ preserveResults = false } = {}) {
+async function hydrateAvailabilityCatalog({ preserveResults = false, analyzeFolderCleanup = true } = {}) {
   availabilityState.catalogLoading = true
   availabilityState.lastError = ''
   scheduleAvailabilityRender()
@@ -1079,7 +1080,7 @@ async function hydrateAvailabilityCatalog({ preserveResults = false } = {}) {
       error instanceof Error ? error.message : '书签列表读取失败，请刷新页面后重试。'
   } finally {
     availabilityState.catalogLoading = false
-    if (folderCleanupState.rootNode) {
+    if (analyzeFolderCleanup && folderCleanupState.rootNode) {
       await analyzeFolderCleanupSuggestions(folderCleanupCallbacks)
     }
     renderAvailabilitySection()

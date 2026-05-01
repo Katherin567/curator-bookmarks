@@ -40,7 +40,7 @@ export const SECTION_META = {
     title: '重复书签'
   },
   'folder-cleanup': {
-    label: 'Folder Cleanup',
+    label: '文件夹清理',
     title: '文件夹清理'
   },
   ignore: {

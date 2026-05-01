@@ -11,6 +11,7 @@ import {
   type ContentSnapshotIndex,
   type ContentSnapshotSettings
 } from '../../shared/content-snapshots.js'
+import type { FolderCleanupSplitUndo } from '../../shared/folder-cleanup.js'
 
 export function createEmptyIgnoreRules() {
   return {
@@ -201,7 +202,8 @@ export const folderCleanupState = {
   lastAnalyzedAt: 0,
   running: false,
   executing: false,
-  executedSuggestionIds: new Set<string>()
+  executedSuggestionIds: new Set<string>(),
+  lastSplitUndo: null as FolderCleanupSplitUndo | null
 }
 
 export const aiNamingState = {
