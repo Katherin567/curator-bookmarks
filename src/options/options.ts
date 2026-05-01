@@ -260,6 +260,7 @@ const LEGACY_AI_NAMING_CACHE_STORAGE_KEYS = [
 ]
 
 const SHORTCUTS_SETTINGS_URL = 'chrome://extensions/shortcuts'
+const NEW_TAB_SHORTCUT_FOLDER_TITLE = '标签页'
 const SHORTCUT_COMMAND_ORDER = [
   '_execute_action',
   'curator-capture-inbox',
@@ -975,23 +976,88 @@ function handleFailedResultAction(event) {
   demoteFailedResultToReview(bookmarkId)
 }
 
+function collectNewTabShortcutFolderIds(
+  rootNode: chrome.bookmarks.BookmarkTreeNode | null | undefined,
+  rawFolderSettings?: unknown
+): Set<string> {
+  const excludedFolderIds = new Set<string>()
+  if (!rootNode) {
+    return excludedFolderIds
+  }
+
+  const selectedFolderIds = new Set(getSelectedNewTabFolderIds(rawFolderSettings))
+
+  function walk(
+    node: chrome.bookmarks.BookmarkTreeNode,
+    parentId = '',
+    insideShortcutFolder = false
+  ) {
+    if (node.url) {
+      return
+    }
+
+    const folderId = String(node.id || '').trim()
+    const effectiveParentId = String(node.parentId || parentId || '').trim()
+    const title = String(node.title || '').trim()
+    const isShortcutFolder =
+      title === NEW_TAB_SHORTCUT_FOLDER_TITLE &&
+      (effectiveParentId === BOOKMARKS_BAR_ID || selectedFolderIds.has(folderId))
+    const shouldExclude = insideShortcutFolder || isShortcutFolder
+
+    if (folderId && shouldExclude) {
+      excludedFolderIds.add(folderId)
+    }
+
+    for (const child of node.children || []) {
+      walk(child, folderId, shouldExclude)
+    }
+  }
+
+  walk(rootNode)
+  return excludedFolderIds
+}
+
+function getSelectedNewTabFolderIds(rawFolderSettings?: unknown): string[] {
+  if (!rawFolderSettings || typeof rawFolderSettings !== 'object' || Array.isArray(rawFolderSettings)) {
+    return []
+  }
+
+  const selectedFolderIds = (rawFolderSettings as Record<string, unknown>).selectedFolderIds
+  if (!Array.isArray(selectedFolderIds)) {
+    return []
+  }
+
+  return selectedFolderIds
+    .map((folderId) => String(folderId || '').trim())
+    .filter(Boolean)
+}
+
 async function hydrateAvailabilityCatalog({ preserveResults = false } = {}) {
   availabilityState.catalogLoading = true
   availabilityState.lastError = ''
   scheduleAvailabilityRender()
 
   try {
-    const tree = await getBookmarkTree()
+    const [tree, newTabStorage] = await Promise.all([
+      getBookmarkTree(),
+      getLocalStorage([STORAGE_KEYS.newTabFolderSettings])
+    ])
     const rootNode = Array.isArray(tree) ? tree[0] : tree
     const extracted = extractBookmarkData(rootNode)
     const bookmarks = extracted.bookmarks
+    const excludedDuplicateFolderIds = collectNewTabShortcutFolderIds(
+      rootNode,
+      newTabStorage[STORAGE_KEYS.newTabFolderSettings]
+    )
 
     folderCleanupState.rootNode = rootNode
     availabilityState.allBookmarks = bookmarks
     availabilityState.allFolders = extracted.folders
     availabilityState.bookmarkMap = extracted.bookmarkMap
     availabilityState.folderMap = extracted.folderMap
-    managerState.duplicateGroups = buildDuplicateGroups(bookmarks)
+    managerState.duplicateGroups = buildDuplicateGroups(bookmarks, {
+      excludedFolderIds: excludedDuplicateFolderIds
+    })
     applyAvailabilityScope({ preserveResults })
     syncAiNamingCatalog({ preserveResults })
   } catch (error) {
