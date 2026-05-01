@@ -2936,6 +2936,14 @@ function normalizeNavigationResultWithNetworkEvidence(
   }
 
   if (isRedirectStatusCode(statusCode) && evidence.finalResponseObserved === false) {
+    if (result.status === 'available' && isCrossOriginRedirectEvidence(evidence, result.finalUrl)) {
+      return {
+        ...result,
+        detail: result.detail ||
+          `后台标签页完成页面导航；主请求只观察到 HTTP ${statusCode} 跨域跳转，未确认最终响应。`
+      }
+    }
+
     return {
       ...result,
       status: 'failed',
@@ -2945,6 +2953,24 @@ function normalizeNavigationResultWithNetworkEvidence(
   }
 
   return result
+}
+
+function isCrossOriginRedirectEvidence(
+  evidence: NavigationNetworkEvidence,
+  finalUrl: string
+): boolean {
+  const redirectTargetUrl = evidence.redirects.at(-1)?.redirectUrl || evidence.finalUrl || ''
+  const observedOrigin = getUrlOrigin(evidence.statusUrl || evidence.requestedUrl)
+  const targetOrigin = getUrlOrigin(finalUrl || redirectTargetUrl)
+  return Boolean(observedOrigin && targetOrigin && observedOrigin !== targetOrigin)
+}
+
+function getUrlOrigin(url: string | undefined): string {
+  try {
+    return new URL(String(url || '').trim()).origin
+  } catch {
+    return ''
+  }
 }
 
 function isRedirectStatusCode(statusCode: number): boolean {
