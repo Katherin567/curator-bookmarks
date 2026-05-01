@@ -46,33 +46,59 @@
         </button>
       </section>
 
-      <label class="search-shell" for="search-input">
-        <span class="search-icon" aria-hidden="true"></span>
-        <span id="search-mode-chip" class="search-mode-chip" aria-hidden="true">本地</span>
-        <input
-          id="search-input"
-          class="search-input"
-          type="search"
-          spellcheck="false"
-          autocomplete="off"
-          autofocus
-          aria-label="搜索书签标题或网址"
-          placeholder="搜索书签或网址"
-        >
-        <button
-          id="natural-search-toggle"
-          class="natural-search-toggle"
-          type="button"
-          aria-label="开启自然语言搜索"
-          aria-pressed="false"
-          title="自然语言搜索"
-        >
-          AI
-        </button>
-        <button id="clear-search" class="clear-search hidden" type="button" aria-label="清空搜索">
-          清空
-        </button>
-      </label>
+      <section class="search-block" aria-label="搜索书签">
+        <label class="search-shell" for="search-input">
+          <span class="search-icon" aria-hidden="true"></span>
+          <span id="search-mode-chip" class="search-mode-chip" aria-hidden="true">本地</span>
+          <input
+            id="search-input"
+            class="search-input"
+            type="search"
+            spellcheck="false"
+            autocomplete="off"
+            autofocus
+            aria-label="搜索书签标题、网址或高级语法"
+            placeholder="site:github.com react / folder:前端 type:文档 / 最近一个月 AI 教程 -youtube"
+          >
+          <button
+            id="natural-search-toggle"
+            class="natural-search-toggle"
+            type="button"
+            aria-label="开启自然语言搜索"
+            aria-pressed="false"
+            title="自然语言搜索"
+          >
+            AI
+          </button>
+          <button id="search-help-toggle" class="search-help-toggle" type="button" aria-expanded="false" aria-controls="search-help-panel">
+            ?
+          </button>
+          <button id="clear-search" class="clear-search hidden" type="button" aria-label="清空搜索">
+            清空
+          </button>
+        </label>
+
+        <div id="search-help-panel" class="search-help-panel hidden" role="dialog" aria-label="搜索语法帮助">
+          <strong>高级搜索语法</strong>
+          <ul>
+            <li><code>site:github.com</code> 限定站点或域名。</li>
+            <li><code>folder:前端</code> 限定文件夹路径。</li>
+            <li><code>type:文档</code> 限定 AI 识别的内容类型。</li>
+            <li><code>最近一个月</code>、<code>本周</code>、<code>今天</code> 限定添加时间。</li>
+            <li><code>-youtube</code> 排除包含该词的结果。</li>
+          </ul>
+        </div>
+
+        <div id="search-chips" class="search-chips hidden" aria-label="当前搜索条件"></div>
+
+        <div class="saved-search-row" aria-label="保存的搜索">
+          <select id="saved-search-select" class="saved-search-select" aria-label="选择保存的搜索">
+            <option value="">选择保存搜索</option>
+          </select>
+          <button id="save-search" class="saved-search-button" type="button">保存</button>
+          <button id="delete-saved-search" class="saved-search-button danger" type="button">删除</button>
+        </div>
+      </section>
 
       <section class="toolbar" aria-label="当前视图状态">
         <p class="view-caption" id="view-caption">书签栏</p>

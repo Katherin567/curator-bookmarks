@@ -1,0 +1,388 @@
+import { SAVED_SEARCH_LIMIT, STORAGE_KEYS } from './constants.js'
+import { getLocalStorage, setLocalStorage } from './storage.js'
+import { normalizeText, stripCommonUrlPrefix } from './text.js'
+
+export type SearchChipKind = 'site' | 'folder' | 'type' | 'time' | 'exclude'
+export type SavedSearchScope = 'popup' | 'dashboard' | 'both'
+
+export interface SearchDateRange {
+  from: number
+  to: number
+  label: string
+}
+
+export interface ParsedSearchQuery {
+  rawQuery: string
+  textTerms: string[]
+  siteFilters: string[]
+  folderFilters: string[]
+  typeFilters: string[]
+  excludedTerms: string[]
+  dateRange: SearchDateRange | null
+  chips: Array<{ kind: SearchChipKind; label: string; value: string }>
+}
+
+export interface SavedSearch {
+  id: string
+  name: string
+  query: string
+  scope: SavedSearchScope
+  createdAt: number
+  updatedAt: number
+}
+
+export interface SavedSearchIndex {
+  version: 1
+  updatedAt: number
+  searches: SavedSearch[]
+}
+
+const EMPTY_INDEX: SavedSearchIndex = {
+  version: 1,
+  updatedAt: 0,
+  searches: []
+}
+
+const TIME_PATTERNS = [
+  { pattern: /^(最近|近)(一|1)个月$/, amount: 1, unit: 'month', label: '最近一个月' },
+  { pattern: /^(最近|近)(三|3)个月$/, amount: 3, unit: 'month', label: '最近三个月' },
+  { pattern: /^(最近|近)(一|1)周$/, amount: 7, unit: 'day', label: '最近一周' },
+  { pattern: /^(最近|近)(七|7)天$/, amount: 7, unit: 'day', label: '最近七天' },
+  { pattern: /^(最近|近)(三十|30)天$/, amount: 30, unit: 'day', label: '最近三十天' },
+  { pattern: /^(本月|这个月)$/, amount: 0, unit: 'current-month', label: '本月' },
+  { pattern: /^(本周|这周|这个星期)$/, amount: 0, unit: 'current-week', label: '本周' },
+  { pattern: /^(今天)$/, amount: 0, unit: 'today', label: '今天' }
+] as const
+
+export function parseSearchQuery(query: unknown, now = Date.now()): ParsedSearchQuery {
+  const rawQuery = normalizeSearchValue(query)
+  const tokens = rawQuery.split(/\s+/).filter(Boolean)
+  const textTerms: string[] = []
+  const siteFilters: string[] = []
+  const folderFilters: string[] = []
+  const typeFilters: string[] = []
+  const excludedTerms: string[] = []
+  const chips: ParsedSearchQuery['chips'] = []
+  let dateRange: SearchDateRange | null = null
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]
+    const mergedTime = parseTimeExpression(tokens, index, now)
+    if (mergedTime) {
+      dateRange = mergedTime.range
+      chips.push({ kind: 'time', label: `时间：${mergedTime.range.label}`, value: mergedTime.range.label })
+      index += mergedTime.consumed - 1
+      continue
+    }
+
+    const operator = parseSearchOperatorTerm(token)
+    if (operator) {
+      if (operator.kind === 'site') {
+        siteFilters.push(operator.value)
+        chips.push({ kind: 'site', label: `站点：${operator.value}`, value: operator.value })
+      } else if (operator.kind === 'folder') {
+        folderFilters.push(operator.value)
+        chips.push({ kind: 'folder', label: `文件夹：${operator.value}`, value: operator.value })
+      } else {
+        typeFilters.push(operator.value)
+        chips.push({ kind: 'type', label: `类型：${operator.value}`, value: operator.value })
+      }
+      continue
+    }
+
+    if (token.startsWith('-') && token.length > 1) {
+      const value = normalizeFilterValue(token.slice(1))
+      if (value) {
+        excludedTerms.push(value)
+        chips.push({ kind: 'exclude', label: `排除：${value}`, value })
+      }
+      continue
+    }
+
+    textTerms.push(token)
+  }
+
+  return {
+    rawQuery,
+    textTerms: uniqueTerms(textTerms),
+    siteFilters: uniqueTerms(siteFilters),
+    folderFilters: uniqueTerms(folderFilters),
+    typeFilters: uniqueTerms(typeFilters),
+    excludedTerms: uniqueTerms(excludedTerms),
+    dateRange,
+    chips: dedupeChips(chips)
+  }
+}
+
+export function buildSearchTextQuery(parsed: ParsedSearchQuery): string {
+  return parsed.textTerms.join(' ')
+}
+
+export function matchesParsedSearchQuery(
+  parsed: ParsedSearchQuery,
+  target: {
+    searchText: string
+    domain?: string
+    url?: string
+    path?: string
+    type?: string
+    dateAdded?: number
+  }
+): boolean {
+  const searchText = normalizeSearchValue(target.searchText)
+  const domain = normalizeSearchValue(target.domain)
+  const url = normalizeSearchValue(target.url)
+  const path = normalizeSearchValue(target.path)
+  const type = normalizeSearchValue(target.type)
+
+  if (parsed.siteFilters.length && !parsed.siteFilters.some((filter) => domain.includes(filter) || url.includes(filter))) {
+    return false
+  }
+
+  if (parsed.folderFilters.length && !parsed.folderFilters.some((filter) => path.includes(filter))) {
+    return false
+  }
+
+  if (parsed.typeFilters.length && !parsed.typeFilters.some((filter) => type.includes(filter))) {
+    return false
+  }
+
+  if (parsed.excludedTerms.length && parsed.excludedTerms.some((term) => searchText.includes(term))) {
+    return false
+  }
+
+  if (parsed.dateRange) {
+    const dateAdded = Number(target.dateAdded)
+    if (!Number.isFinite(dateAdded) || dateAdded < parsed.dateRange.from || dateAdded > parsed.dateRange.to) {
+      return false
+    }
+  }
+
+  return true
+}
+
+export function normalizeSavedSearchIndex(value: unknown): SavedSearchIndex {
+  if (!value || typeof value !== 'object') {
+    return { ...EMPTY_INDEX, searches: [] }
+  }
+
+  const raw = value as Partial<SavedSearchIndex>
+  const searches = Array.isArray(raw.searches)
+    ? raw.searches.map(normalizeSavedSearch).filter(Boolean) as SavedSearch[]
+    : []
+
+  return {
+    version: 1,
+    updatedAt: normalizeTimestamp(raw.updatedAt),
+    searches: searches
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .slice(0, SAVED_SEARCH_LIMIT)
+  }
+}
+
+export async function loadSavedSearchIndex(): Promise<SavedSearchIndex> {
+  const stored = await getLocalStorage([STORAGE_KEYS.savedSearches])
+  return normalizeSavedSearchIndex(stored[STORAGE_KEYS.savedSearches])
+}
+
+export async function saveSearch(
+  index: SavedSearchIndex,
+  input: { name: string; query: string; scope: SavedSearchScope; now?: number }
+): Promise<SavedSearchIndex> {
+  const now = normalizeTimestamp(input.now || Date.now())
+  const query = String(input.query || '').trim()
+  const name = String(input.name || '').trim().slice(0, 60) || query.slice(0, 60) || '未命名搜索'
+  const scope: SavedSearchScope = ['popup', 'dashboard', 'both'].includes(input.scope) ? input.scope : 'both'
+  const normalized = normalizeSavedSearchIndex(index)
+  const duplicate = normalized.searches.find((item) => item.query === query && item.scope === scope)
+  const nextSearch: SavedSearch = duplicate
+    ? { ...duplicate, name, updatedAt: now }
+    : {
+      id: createSavedSearchId(now),
+      name,
+      query,
+      scope,
+      createdAt: now,
+      updatedAt: now
+    }
+
+  const nextIndex: SavedSearchIndex = {
+    version: 1,
+    updatedAt: now,
+    searches: [
+      nextSearch,
+      ...normalized.searches.filter((item) => item.id !== nextSearch.id)
+    ].slice(0, SAVED_SEARCH_LIMIT)
+  }
+
+  await persistSavedSearchIndex(nextIndex)
+  return nextIndex
+}
+
+export async function deleteSavedSearch(index: SavedSearchIndex, id: string): Promise<SavedSearchIndex> {
+  const normalized = normalizeSavedSearchIndex(index)
+  const nextIndex: SavedSearchIndex = {
+    version: 1,
+    updatedAt: Date.now(),
+    searches: normalized.searches.filter((item) => item.id !== String(id))
+  }
+  await persistSavedSearchIndex(nextIndex)
+  return nextIndex
+}
+
+export function getSavedSearchesForScope(index: SavedSearchIndex, scope: SavedSearchScope): SavedSearch[] {
+  return normalizeSavedSearchIndex(index).searches.filter((item) => item.scope === 'both' || item.scope === scope)
+}
+
+function parseSearchOperatorTerm(term: string): { kind: 'site' | 'folder' | 'type'; value: string } | null {
+  const match = String(term || '').match(/^([^:：]+)[:：](.+)$/)
+  if (!match) {
+    return null
+  }
+
+  const key = normalizeSearchValue(match[1])
+  const value = normalizeFilterValue(match[2])
+  if (!value) {
+    return null
+  }
+
+  if (key === 'site' || key === 'domain' || key === 'url' || key === '站点' || key === '域名') {
+    return { kind: 'site', value }
+  }
+  if (key === 'folder' || key === 'path' || key === '文件夹' || key === '目录' || key === '路径') {
+    return { kind: 'folder', value }
+  }
+  if (key === 'type' || key === 'kind' || key === '类型' || key === '类别') {
+    return { kind: 'type', value }
+  }
+
+  return null
+}
+
+function parseTimeExpression(tokens: string[], index: number, now: number): { range: SearchDateRange; consumed: number } | null {
+  const single = parseTimeToken(tokens[index], now)
+  if (single) {
+    return { range: single, consumed: 1 }
+  }
+
+  const merged = `${tokens[index] || ''}${tokens[index + 1] || ''}`
+  const mergedRange = parseTimeToken(merged, now)
+  if (mergedRange) {
+    return { range: mergedRange, consumed: 2 }
+  }
+
+  return null
+}
+
+function parseTimeToken(token: string, now: number): SearchDateRange | null {
+  const value = normalizeSearchValue(token)
+  for (const item of TIME_PATTERNS) {
+    if (item.pattern.test(value)) {
+      return buildDateRange(item.amount, item.unit, item.label, now)
+    }
+  }
+  return null
+}
+
+function buildDateRange(amount: number, unit: string, label: string, now: number): SearchDateRange {
+  const end = endOfDay(now)
+  if (unit === 'month') {
+    const date = new Date(now)
+    date.setMonth(date.getMonth() - amount)
+    return { from: startOfDay(date.getTime()), to: end, label }
+  }
+  if (unit === 'day') {
+    return { from: startOfDay(now - amount * 24 * 60 * 60 * 1000), to: end, label }
+  }
+  if (unit === 'current-month') {
+    const date = new Date(now)
+    return { from: new Date(date.getFullYear(), date.getMonth(), 1).getTime(), to: end, label }
+  }
+  if (unit === 'current-week') {
+    const date = new Date(now)
+    const day = date.getDay() || 7
+    return { from: startOfDay(now - (day - 1) * 24 * 60 * 60 * 1000), to: end, label }
+  }
+  return { from: startOfDay(now), to: end, label }
+}
+
+function startOfDay(timestamp: number): number {
+  const date = new Date(timestamp)
+  date.setHours(0, 0, 0, 0)
+  return date.getTime()
+}
+
+function endOfDay(timestamp: number): number {
+  const date = new Date(timestamp)
+  date.setHours(23, 59, 59, 999)
+  return date.getTime()
+}
+
+function normalizeSavedSearch(value: unknown): SavedSearch | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+
+  const raw = value as Partial<SavedSearch>
+  const query = String(raw.query || '').trim()
+  if (!query) {
+    return null
+  }
+
+  const scope = ['popup', 'dashboard', 'both'].includes(String(raw.scope))
+    ? raw.scope as SavedSearchScope
+    : 'both'
+  const updatedAt = normalizeTimestamp(raw.updatedAt || raw.createdAt)
+  const createdAt = normalizeTimestamp(raw.createdAt || updatedAt)
+
+  return {
+    id: String(raw.id || createSavedSearchId(createdAt)).trim(),
+    name: String(raw.name || query).trim().slice(0, 60),
+    query,
+    scope,
+    createdAt,
+    updatedAt
+  }
+}
+
+async function persistSavedSearchIndex(index: SavedSearchIndex): Promise<void> {
+  await setLocalStorage({ [STORAGE_KEYS.savedSearches]: normalizeSavedSearchIndex(index) })
+}
+
+function normalizeTimestamp(value: unknown): number {
+  const timestamp = Number(value)
+  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : Date.now()
+}
+
+function createSavedSearchId(now: number): string {
+  const random = globalThis.crypto
+    ? Array.from(globalThis.crypto.getRandomValues(new Uint32Array(2))).map((value) => value.toString(36)).join('')
+    : Math.random().toString(36).slice(2)
+  return `search-${now.toString(36)}-${random}`
+}
+
+function normalizeSearchValue(value: unknown): string {
+  return normalizeText(stripCommonUrlPrefix(value))
+    .replace(/^["'“”‘’]+|["'“”‘’]+$/g, '')
+    .trim()
+}
+
+function normalizeFilterValue(value: unknown): string {
+  return normalizeSearchValue(value)
+}
+
+function uniqueTerms(values: string[]): string[] {
+  return [...new Set(values.map((value) => normalizeFilterValue(value)).filter(Boolean))]
+}
+
+function dedupeChips(chips: ParsedSearchQuery['chips']): ParsedSearchQuery['chips'] {
+  const seen = new Set<string>()
+  return chips.filter((chip) => {
+    const key = `${chip.kind}:${chip.value}`
+    if (seen.has(key)) {
+      return false
+    }
+    seen.add(key)
+    return true
+  })
+}
