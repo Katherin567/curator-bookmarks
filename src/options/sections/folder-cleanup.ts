@@ -1,11 +1,15 @@
 import { STORAGE_KEYS } from '../../shared/constants.js'
 import { createAutoBackupBeforeDangerousOperation } from '../../shared/backup.js'
-import { createBookmark, moveBookmark, removeBookmarkTree } from '../../shared/bookmarks-api.js'
+import { createBookmark, getBookmarkTree, moveBookmark, removeBookmarkTree } from '../../shared/bookmarks-api.js'
 import type { BookmarkTagIndex } from '../../shared/bookmark-tags.js'
 import { setLocalStorage } from '../../shared/storage.js'
 import {
   analyzeFolderCleanup,
+  createFolderCleanupSplitUndo,
+  normalizeFolderCleanupSplitUndo,
   type FolderCleanupOperationKind,
+  type FolderCleanupSplitUndo,
+  type FolderCleanupSplitUndoMove,
   type FolderCleanupSuggestion
 } from '../../shared/folder-cleanup.js'
 import { availabilityState, aiNamingState, folderCleanupState, managerState } from '../shared-options/state.js'
@@ -22,7 +26,10 @@ interface FolderCleanupCallbacks {
     tone?: string
     label?: string
   }) => Promise<boolean>
-  hydrateAvailabilityCatalog: (options?: { preserveResults?: boolean }) => Promise<void>
+  hydrateAvailabilityCatalog: (options?: {
+    preserveResults?: boolean
+    analyzeFolderCleanup?: boolean
+  }) => Promise<void>
   renderAvailabilitySection: () => void
 }
 
@@ -49,6 +56,7 @@ export function hydrateFolderCleanupState(rawState) {
 
   folderCleanupState.lastAnalyzedAt = Number(rawState.lastAnalyzedAt) || 0
   folderCleanupState.statusMessage = String(rawState.statusMessage || '').trim()
+  folderCleanupState.lastSplitUndo = normalizeFolderCleanupSplitUndo(rawState.lastSplitUndo)
 }
 
 export async function analyzeFolderCleanupSuggestions(callbacks: FolderCleanupCallbacks) {
@@ -56,11 +64,48 @@ export async function analyzeFolderCleanupSuggestions(callbacks: FolderCleanupCa
     return
   }
 
+  await runFolderCleanupAnalysis(callbacks, { refreshCatalog: false })
+}
+
+export async function rescanFolderCleanupSuggestions(callbacks: FolderCleanupCallbacks) {
+  if (folderCleanupState.running || folderCleanupState.executing) {
+    return
+  }
+
+  await runFolderCleanupAnalysis(callbacks, { refreshCatalog: true })
+}
+
+async function runFolderCleanupAnalysis(
+  callbacks: FolderCleanupCallbacks,
+  options: { refreshCatalog: boolean }
+) {
+  if (!options.refreshCatalog && !folderCleanupState.rootNode) {
+    return
+  }
+
   folderCleanupState.running = true
-  folderCleanupState.statusMessage = '正在扫描文件夹结构…'
+  folderCleanupState.statusMessage = options.refreshCatalog
+    ? '正在重新读取 Chrome 书签树…'
+    : '正在扫描文件夹结构…'
   renderFolderCleanupSection(callbacks)
 
   try {
+    if (options.refreshCatalog) {
+      await callbacks.hydrateAvailabilityCatalog({
+        preserveResults: true,
+        analyzeFolderCleanup: false
+      })
+      folderCleanupState.executedSuggestionIds.clear()
+    }
+
+    if (!folderCleanupState.rootNode) {
+      folderCleanupState.suggestions = []
+      folderCleanupState.lastAnalyzedAt = 0
+      folderCleanupState.statusMessage = '暂未读取到书签树，请稍后重试。'
+      await persistFolderCleanupState()
+      return
+    }
+
     folderCleanupState.suggestions = analyzeFolderCleanup(folderCleanupState.rootNode, {
       tagIndex: aiNamingState.tagIndex as BookmarkTagIndex,
       reservedFolderTitles: getReservedFolderCleanupTitles()
@@ -110,7 +155,7 @@ export function renderFolderCleanupSection(callbacks: FolderCleanupCallbacks) {
 
   if (dom.folderCleanupResultsSubtitle) {
     dom.folderCleanupResultsSubtitle.textContent = folderCleanupState.lastAnalyzedAt
-      ? `上次扫描：${formatDateTime(folderCleanupState.lastAnalyzedAt)}。所有危险操作都会先确认并触发自动备份 hook。`
+      ? `上次扫描：${formatDateTime(folderCleanupState.lastAnalyzedAt)}。删除、合并、移动和拆分都会先确认并触发自动备份 hook；拆分会记录本次撤销信息。`
       : '所有建议默认只预览，不会自动修改书签。'
   }
 
@@ -124,12 +169,17 @@ export function renderFolderCleanupSection(callbacks: FolderCleanupCallbacks) {
     return
   }
 
+  const splitUndoNotice = folderCleanupState.lastSplitUndo
+    ? buildSplitUndoNotice(folderCleanupState.lastSplitUndo, locked)
+    : ''
+
   if (!suggestions.length) {
-    dom.folderCleanupResults.innerHTML = `<div class="detect-empty">${escapeHtml(folderCleanupState.statusMessage || '当前未发现需要清理的文件夹。')}</div>`
+    dom.folderCleanupResults.innerHTML = splitUndoNotice ||
+      `<div class="detect-empty">${escapeHtml(folderCleanupState.statusMessage || '当前未发现需要清理的文件夹。')}</div>`
     return
   }
 
-  dom.folderCleanupResults.innerHTML = suggestions.map((suggestion) => buildSuggestionCard(suggestion, locked)).join('')
+  dom.folderCleanupResults.innerHTML = `${splitUndoNotice}${suggestions.map((suggestion) => buildSuggestionCard(suggestion, locked)).join('')}`
 }
 
 export async function handleFolderCleanupClick(event: Event, callbacks: FolderCleanupCallbacks) {
@@ -139,6 +189,12 @@ export async function handleFolderCleanupClick(event: Event, callbacks: FolderCl
   }
 
   const actionButton = target.closest('[data-folder-cleanup-action]') as HTMLElement | null
+  const undoButton = target.closest('[data-folder-cleanup-undo-split]') as HTMLElement | null
+  if (undoButton) {
+    await handleSplitUndoClick(callbacks)
+    return
+  }
+
   if (!actionButton || folderCleanupState.running || folderCleanupState.executing || isInteractionLocked()) {
     return
   }
@@ -154,7 +210,7 @@ export async function handleFolderCleanupClick(event: Event, callbacks: FolderCl
     copy: getConfirmCopy(suggestion),
     confirmLabel: getConfirmLabel(suggestion.operation),
     tone: suggestion.severity === 'danger' ? 'danger' : 'warning',
-    label: 'Folder Cleanup'
+    label: '文件夹清理'
   })
   if (!confirmed) {
     return
@@ -170,6 +226,8 @@ async function executeFolderCleanupSuggestion(
   folderCleanupState.executing = true
   folderCleanupState.statusMessage = '正在执行清理操作…'
   renderFolderCleanupSection(callbacks)
+
+  let splitUndo: FolderCleanupSplitUndo | null = null
 
   try {
     await createAutoBackupBeforeDangerousOperation({
@@ -188,11 +246,16 @@ async function executeFolderCleanupSuggestion(
     } else if (suggestion.operation === 'merge') {
       await mergeFolders(suggestion)
     } else if (suggestion.operation === 'split') {
-      await splitLargeFolder(suggestion)
+      splitUndo = await splitLargeFolder(suggestion)
     }
 
+    if (splitUndo) {
+      folderCleanupState.lastSplitUndo = splitUndo
+    }
     folderCleanupState.executedSuggestionIds.add(suggestion.id)
-    folderCleanupState.statusMessage = '清理操作已完成。'
+    folderCleanupState.statusMessage = splitUndo
+      ? '拆分已完成，已记录本次移动；可在建议区撤销本次拆分。'
+      : '清理操作已完成。'
     await callbacks.hydrateAvailabilityCatalog({ preserveResults: true })
     if (folderCleanupState.rootNode) {
       folderCleanupState.suggestions = analyzeFolderCleanup(folderCleanupState.rootNode, {
@@ -249,15 +312,197 @@ async function splitLargeFolder(suggestion: FolderCleanupSuggestion) {
     throw new Error('缺少拆分目标。')
   }
 
-  for (const group of suggestion.splitGroups) {
-    const folder = await createBookmark({
-      parentId: targetFolderId,
-      title: sanitizeFolderTitle(group.label)
-    })
+  const createdFolderIds: string[] = []
+  try {
+    for (const group of suggestion.splitGroups) {
+      const folder = await createBookmark({
+        parentId: targetFolderId,
+        title: sanitizeFolderTitle(group.label)
+      })
+      createdFolderIds.push(String(folder.id))
+    }
+  } catch (error) {
+    await deleteFolders(createdFolderIds).catch(() => undefined)
+    throw error
+  }
+
+  const splitUndo = createFolderCleanupSplitUndo(suggestion, createdFolderIds)
+  if (!splitUndo) {
+    await deleteFolders(createdFolderIds)
+    throw new Error('无法记录拆分前位置，已停止拆分。')
+  }
+
+  folderCleanupState.lastSplitUndo = splitUndo
+  await persistFolderCleanupState()
+
+  for (const [groupIndex, group] of suggestion.splitGroups.entries()) {
+    const folderId = createdFolderIds[groupIndex]
     for (const bookmarkId of group.bookmarkIds) {
-      await moveBookmark(bookmarkId, folder.id)
+      await moveBookmark(bookmarkId, folderId)
     }
   }
+
+  return splitUndo
+}
+
+async function handleSplitUndoClick(callbacks: FolderCleanupCallbacks) {
+  if (folderCleanupState.running || folderCleanupState.executing || isInteractionLocked()) {
+    return
+  }
+
+  const splitUndo = folderCleanupState.lastSplitUndo
+  if (!splitUndo) {
+    return
+  }
+
+  const confirmed = await callbacks.confirm({
+    title: '撤销本次拆分？',
+    copy: [
+      `将把 ${splitUndo.moves.length} 个书签移回拆分前的位置，并删除本次新建的 ${splitUndo.createdFolderIds.length} 个拆分文件夹。`,
+      '撤销前会先调用自动备份 hook；如果新建文件夹里已有额外内容，会保留该文件夹避免误删。'
+    ].join('\n'),
+    confirmLabel: '撤销本次拆分',
+    tone: 'warning',
+    label: '文件夹清理'
+  })
+  if (!confirmed) {
+    return
+  }
+
+  await undoFolderCleanupSplit(splitUndo, callbacks)
+}
+
+async function undoFolderCleanupSplit(
+  splitUndo: FolderCleanupSplitUndo,
+  callbacks: FolderCleanupCallbacks
+) {
+  folderCleanupState.executing = true
+  folderCleanupState.statusMessage = '正在撤销本次拆分…'
+  renderFolderCleanupSection(callbacks)
+
+  try {
+    await createAutoBackupBeforeDangerousOperation({
+      kind: 'folder-cleanup-move',
+      source: 'options',
+      reason: `撤销拆分：${splitUndo.title}`,
+      targetBookmarkIds: splitUndo.moves.map((move) => move.bookmarkId),
+      targetFolderIds: [splitUndo.targetFolderId, ...splitUndo.createdFolderIds].filter(Boolean),
+      estimatedChangeCount: splitUndo.moves.length + splitUndo.createdFolderIds.length
+    })
+
+    for (const move of sortSplitUndoMoves(splitUndo.moves)) {
+      await restoreSplitUndoMove(move)
+    }
+
+    const retainedFolderCount = await removeEmptySplitFolders(splitUndo.createdFolderIds)
+    folderCleanupState.lastSplitUndo = null
+    folderCleanupState.executedSuggestionIds.delete(splitUndo.suggestionId)
+    folderCleanupState.statusMessage = retainedFolderCount
+      ? `已撤销本次拆分；${retainedFolderCount} 个新建文件夹仍有额外内容，已保留。`
+      : '已撤销本次拆分，书签已移回拆分前位置。'
+
+    await callbacks.hydrateAvailabilityCatalog({ preserveResults: true })
+    if (folderCleanupState.rootNode) {
+      folderCleanupState.suggestions = analyzeFolderCleanup(folderCleanupState.rootNode, {
+        tagIndex: aiNamingState.tagIndex as BookmarkTagIndex,
+        reservedFolderTitles: getReservedFolderCleanupTitles()
+      })
+      folderCleanupState.lastAnalyzedAt = Date.now()
+    }
+    await persistFolderCleanupState()
+  } catch (error) {
+    folderCleanupState.statusMessage = error instanceof Error
+      ? `撤销拆分失败：${error.message}`
+      : '撤销拆分失败，请稍后重试。'
+  } finally {
+    folderCleanupState.executing = false
+    callbacks.renderAvailabilitySection()
+    renderFolderCleanupSection(callbacks)
+  }
+}
+
+async function restoreSplitUndoMove(move: FolderCleanupSplitUndoMove) {
+  if (!move.fromParentId) {
+    throw new Error(`书签 ${move.bookmarkId} 缺少原父级，无法撤销。`)
+  }
+
+  if (Number.isFinite(move.fromIndex)) {
+    try {
+      await moveBookmark(move.bookmarkId, move.fromParentId, move.fromIndex)
+      return
+    } catch {
+      await moveBookmark(move.bookmarkId, move.fromParentId)
+      return
+    }
+  }
+
+  await moveBookmark(move.bookmarkId, move.fromParentId)
+}
+
+function sortSplitUndoMoves(moves: FolderCleanupSplitUndoMove[]): FolderCleanupSplitUndoMove[] {
+  return moves.slice().sort((left, right) => (
+    String(left.fromParentId).localeCompare(String(right.fromParentId), 'zh-CN') ||
+    (Number(left.fromIndex) || 0) - (Number(right.fromIndex) || 0)
+  ))
+}
+
+async function removeEmptySplitFolders(folderIds: string[]): Promise<number> {
+  const roots = await getBookmarkTree()
+  let retainedFolderCount = 0
+
+  for (const folderId of folderIds) {
+    const node = findBookmarkTreeNode(roots, folderId)
+    if (!node) {
+      continue
+    }
+    if (node.url || (node.children || []).length > 0) {
+      retainedFolderCount += 1
+      continue
+    }
+    await removeBookmarkTree(folderId)
+  }
+
+  return retainedFolderCount
+}
+
+function findBookmarkTreeNode(
+  nodes: chrome.bookmarks.BookmarkTreeNode[],
+  targetId: string
+): chrome.bookmarks.BookmarkTreeNode | null {
+  const queue = nodes.slice()
+  while (queue.length) {
+    const node = queue.shift()
+    if (!node) {
+      continue
+    }
+    if (String(node.id) === String(targetId)) {
+      return node
+    }
+    queue.push(...(node.children || []))
+  }
+  return null
+}
+
+function buildSplitUndoNotice(splitUndo: FolderCleanupSplitUndo, locked: boolean): string {
+  return `
+    <article class="detect-result-card folder-cleanup-undo-card">
+      <div class="detect-result-head">
+        <span class="options-chip warning">可撤销拆分</span>
+        <div class="detect-result-actions">
+          <button
+            class="detect-result-action"
+            type="button"
+            data-folder-cleanup-undo-split="${escapeAttr(splitUndo.id)}"
+            ${locked ? 'disabled' : ''}
+          >撤销本次拆分</button>
+        </div>
+      </div>
+      <div class="detect-result-copy">
+        <strong>${escapeHtml(splitUndo.title)}</strong>
+        <p class="detect-result-detail">已记录 ${splitUndo.moves.length} 个书签的拆分前位置。撤销会先确认并触发自动备份 hook，然后移回书签并删除本次新建的空拆分文件夹。</p>
+      </div>
+    </article>
+  `
 }
 
 function buildSuggestionCard(suggestion: FolderCleanupSuggestion, locked: boolean): string {
@@ -386,10 +631,14 @@ function getConfirmCopy(suggestion: FolderCleanupSuggestion): string {
   const target = suggestion.targetFolderId
     ? suggestion.folders.find((folder) => folder.id === suggestion.targetFolderId)?.path || '目标文件夹'
     : ''
+  const splitUndoCopy = suggestion.operation === 'split'
+    ? '拆分完成后会显示“撤销本次拆分”，可把本次移动的书签移回拆分前位置。'
+    : ''
   return [
     suggestion.summary,
     target ? `目标：${target}` : '',
-    `涉及 ${suggestion.folderIds.length} 个文件夹、${suggestion.bookmarkIds.length} 个书签。执行前会调用自动备份 hook。`
+    `涉及 ${suggestion.folderIds.length} 个文件夹、${suggestion.bookmarkIds.length} 个书签。执行前会调用自动备份 hook。`,
+    splitUndoCopy
   ].filter(Boolean).join('\n')
 }
 
@@ -408,7 +657,8 @@ async function persistFolderCleanupState() {
     [STORAGE_KEYS.folderCleanupState]: {
       version: 1,
       lastAnalyzedAt: folderCleanupState.lastAnalyzedAt,
-      statusMessage: folderCleanupState.statusMessage
+      statusMessage: folderCleanupState.statusMessage,
+      lastSplitUndo: folderCleanupState.lastSplitUndo
     }
   })
 }

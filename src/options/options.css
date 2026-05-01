@@ -2291,6 +2291,11 @@ body.dashboard-fullscreen-active {
   margin-top: 12px;
 }
 
+.folder-cleanup-undo-card {
+  border-color: rgba(255, 206, 141, 0.2);
+  background: rgba(255, 206, 141, 0.08);
+}
+
 .folder-cleanup-preview {
   display: grid;
   gap: 8px;

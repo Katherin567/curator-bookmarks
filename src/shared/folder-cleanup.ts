@@ -15,6 +15,7 @@ export interface FolderCleanupBookmarkSummary {
   title: string
   url: string
   parentId: string
+  index: number
   domain: string
 }
 
@@ -52,6 +53,23 @@ export interface FolderCleanupSuggestion {
   bookmarks: FolderCleanupBookmarkSummary[]
   splitGroups?: FolderCleanupSplitGroup[]
   canExecute: boolean
+}
+
+export interface FolderCleanupSplitUndoMove {
+  bookmarkId: string
+  fromParentId: string
+  fromIndex?: number
+  toFolderId: string
+}
+
+export interface FolderCleanupSplitUndo {
+  id: string
+  suggestionId: string
+  title: string
+  createdAt: number
+  targetFolderId: string
+  createdFolderIds: string[]
+  moves: FolderCleanupSplitUndoMove[]
 }
 
 export interface FolderCleanupAnalysisOptions {
@@ -341,11 +359,101 @@ function buildLargeFolderSuggestions(
         folderIds: [folder.id],
         bookmarkIds: splitGroups.flatMap((group) => group.bookmarkIds),
         folders: [toFolderSummary(folder)],
-        bookmarks: folder.descendantBookmarks.slice(0, 12),
+        bookmarks: folder.descendantBookmarks,
         splitGroups,
         canExecute: splitGroups.length > 0
       } satisfies FolderCleanupSuggestion
     })
+}
+
+export function createFolderCleanupSplitUndo(
+  suggestion: FolderCleanupSuggestion,
+  createdFolderIds: string[],
+  createdAt = Date.now()
+): FolderCleanupSplitUndo | null {
+  if (suggestion.operation !== 'split' || !suggestion.splitGroups?.length) {
+    return null
+  }
+
+  const targetFolderId = String(suggestion.targetFolderId || suggestion.primaryFolderId || '').trim()
+  const normalizedCreatedFolderIds = createdFolderIds.map((folderId) => String(folderId || '').trim())
+  if (!targetFolderId || normalizedCreatedFolderIds.length !== suggestion.splitGroups.length) {
+    return null
+  }
+
+  const bookmarksById = new Map(
+    suggestion.bookmarks.map((bookmark) => [String(bookmark.id), bookmark])
+  )
+  const moves: FolderCleanupSplitUndoMove[] = []
+
+  for (const [groupIndex, group] of suggestion.splitGroups.entries()) {
+    const toFolderId = normalizedCreatedFolderIds[groupIndex]
+    if (!toFolderId) {
+      return null
+    }
+
+    for (const bookmarkId of group.bookmarkIds) {
+      const normalizedBookmarkId = String(bookmarkId || '').trim()
+      const bookmark = bookmarksById.get(normalizedBookmarkId)
+      if (!normalizedBookmarkId || !bookmark?.parentId) {
+        return null
+      }
+
+      moves.push({
+        bookmarkId: normalizedBookmarkId,
+        fromParentId: String(bookmark.parentId),
+        fromIndex: Number.isFinite(bookmark.index) ? bookmark.index : undefined,
+        toFolderId
+      })
+    }
+  }
+
+  if (!moves.length) {
+    return null
+  }
+
+  return {
+    id: `split-undo:${suggestion.id}:${createdAt}`,
+    suggestionId: suggestion.id,
+    title: suggestion.title,
+    createdAt,
+    targetFolderId,
+    createdFolderIds: normalizedCreatedFolderIds,
+    moves
+  }
+}
+
+export function normalizeFolderCleanupSplitUndo(rawUndo: unknown): FolderCleanupSplitUndo | null {
+  if (!rawUndo || typeof rawUndo !== 'object') {
+    return null
+  }
+
+  const undo = rawUndo as Partial<FolderCleanupSplitUndo>
+  const moves = Array.isArray(undo.moves)
+    ? undo.moves.map((move) => ({
+        bookmarkId: String(move?.bookmarkId || '').trim(),
+        fromParentId: String(move?.fromParentId || '').trim(),
+        fromIndex: Number.isFinite(Number(move?.fromIndex)) ? Number(move?.fromIndex) : undefined,
+        toFolderId: String(move?.toFolderId || '').trim()
+      })).filter((move) => move.bookmarkId && move.fromParentId && move.toFolderId)
+    : []
+  const createdFolderIds = Array.isArray(undo.createdFolderIds)
+    ? undo.createdFolderIds.map((folderId) => String(folderId || '').trim()).filter(Boolean)
+    : []
+
+  if (!moves.length || !createdFolderIds.length) {
+    return null
+  }
+
+  return {
+    id: String(undo.id || `split-undo:${Date.now()}`).trim(),
+    suggestionId: String(undo.suggestionId || '').trim(),
+    title: String(undo.title || '拆分超大文件夹').trim() || '拆分超大文件夹',
+    createdAt: Number(undo.createdAt) || Date.now(),
+    targetFolderId: String(undo.targetFolderId || '').trim(),
+    createdFolderIds,
+    moves
+  }
 }
 
 function buildSplitGroups(
@@ -419,6 +527,7 @@ function toBookmarkSummary(node: chrome.bookmarks.BookmarkTreeNode): FolderClean
     title: String(node.title || '').trim() || '未命名书签',
     url: String(node.url || ''),
     parentId: String(node.parentId || ''),
+    index: Number.isFinite(Number(node.index)) ? Number(node.index) : 0,
     domain: extractHostname(String(node.url || ''))
   }
 }
