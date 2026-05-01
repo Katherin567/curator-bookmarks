@@ -351,12 +351,12 @@ button:focus-visible {
 .hero > .search-help-toggle {
   position: absolute;
   top: 50%;
-  left: 0;
-  width: 30px;
-  height: 30px;
-  min-height: 30px;
+  left: 7px;
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
   padding: 0;
-  border-radius: 8px;
+  border-radius: 50%;
   transform: translateY(-50%);
 }
 
@@ -667,63 +667,62 @@ button:focus-visible {
 }
 
 .search-help-toggle {
+  position: relative;
   flex: none;
-  min-height: 26px;
+  min-height: 16px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
+  width: 16px;
+  height: 16px;
   padding: 0;
-  border: 1px solid rgba(245, 245, 247, 0.24);
-  border-radius: 7px;
-  background: #171719;
+  border: 1px solid var(--surface-3);
+  border-radius: 50%;
+  background: transparent;
   color: var(--text-soft);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 650;
+  line-height: 1;
   white-space: nowrap;
+  cursor: help;
 }
 
 .search-help-toggle:hover,
 .search-help-toggle:focus-visible {
-  border-color: rgba(245, 245, 247, 0.5);
-  background: #26262a;
+  border-color: var(--surface-4);
   color: var(--text);
 }
 
-.search-help-panel {
+.search-help-toggle::after {
+  content: attr(data-tooltip);
   position: absolute;
-  top: calc(100% + 8px);
+  top: calc(100% + 10px);
   left: 0;
-  right: auto;
   z-index: 20;
-  width: min(320px, calc(100vw - 28px));
-  padding: 12px;
-  border: 1px solid #3a3a3c;
+  width: min(300px, calc(100vw - 48px));
+  padding: 10px 12px;
+  border: 1px solid var(--surface-3);
   border-radius: 10px;
-  background: #1d1d1f;
-  color: var(--text-soft);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.32);
-}
-
-.search-help-panel strong {
-  display: block;
-  margin-bottom: 8px;
+  background: var(--surface-0);
   color: var(--text);
   font-size: 12px;
+  font-weight: 500;
+  line-height: 1.6;
+  text-align: left;
+  white-space: pre-line;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.28);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition:
+    opacity var(--ease-standard),
+    transform var(--ease-standard);
 }
 
-.search-help-panel ul {
-  display: grid;
-  gap: 6px;
-  margin: 0;
-  padding-left: 18px;
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.search-help-panel code {
-  color: var(--text);
-  font-family: "SF Mono", "Cascadia Code", monospace;
+.search-help-toggle:hover::after,
+.search-help-toggle:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .search-chips {
@@ -863,8 +862,7 @@ body.smart-active .content-shell {
   display: none;
 }
 
-body.smart-active .search-help-toggle,
-body.smart-active .search-help-panel {
+body.smart-active .search-help-toggle {
   display: none;
 }
 

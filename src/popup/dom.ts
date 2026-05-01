@@ -25,7 +25,6 @@ export function cacheDom(): void {
   dom.naturalSearchToggle = byId('natural-search-toggle')
   dom.clearSearch = byId('clear-search')
   dom.searchHelpToggle = byId('search-help-toggle')
-  dom.searchHelpPanel = byId('search-help-panel')
   dom.searchChips = byId('search-chips')
   dom.viewCaption = byId('view-caption')
   dom.folderFilterTrigger = byId('folder-filter-trigger')

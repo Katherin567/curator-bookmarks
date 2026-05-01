@@ -216,10 +216,6 @@ function bindEvents() {
     showViewNotice('已清空搜索')
     dom.searchInput.focus()
   })
-  dom.searchHelpToggle.addEventListener('click', () => {
-    state.searchHelpOpen = !state.searchHelpOpen
-    renderSearchTools()
-  })
   dom.folderFilterTrigger.addEventListener('click', openFilterDialog)
   dom.clearFolderFilter.addEventListener('click', clearFolderFilter)
   dom.openInboxFilter.addEventListener('click', applyInboxFolderFilter)
@@ -1102,8 +1098,6 @@ function renderBanner() {
 function renderSearchTools() {
   const parsed = parseSearchQuery(state.searchQuery)
   const chips = parsed.chips
-  dom.searchHelpPanel.classList.toggle('hidden', !state.searchHelpOpen)
-  dom.searchHelpToggle.setAttribute('aria-expanded', String(state.searchHelpOpen))
   dom.searchChips.classList.toggle('hidden', chips.length === 0)
   dom.searchChips.innerHTML = chips
     .map((chip) => `<span class="search-filter-chip ${escapeAttr(chip.kind)}">${escapeHtml(chip.label)}</span>`)
@@ -1131,7 +1125,7 @@ function isNaturalSearchLocalFallback() {
 }
 
 function getNaturalSearchToggleText() {
-  return '自然'
+  return 'AI'
 }
 
 function getNaturalSearchToggleAriaLabel(isPending: boolean) {

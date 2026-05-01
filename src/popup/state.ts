@@ -71,7 +71,6 @@ export interface PopupState {
   searchRunId: number
   searchPending: boolean
   searchCache: Map<string, PopupSearchResult[]>
-  searchHelpOpen: boolean
   naturalSearchEnabled: boolean
   naturalSearchPending: boolean
   naturalSearchError: string
@@ -147,7 +146,6 @@ export const state: PopupState = {
   searchRunId: 0,
   searchPending: false,
   searchCache: new Map(),
-  searchHelpOpen: false,
   naturalSearchEnabled: false,
   naturalSearchPending: false,
   naturalSearchError: '',

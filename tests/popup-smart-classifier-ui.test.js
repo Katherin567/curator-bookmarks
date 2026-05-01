@@ -25,6 +25,6 @@ test('smart classifier active state hides advanced search help controls', () => 
 
   assert.match(
     popupStyles,
-    /body\.smart-active \.search-help-toggle,\s*body\.smart-active \.search-help-panel\s*\{[^}]*display:\s*none;/s
+    /body\.smart-active \.search-help-toggle\s*\{[^}]*display:\s*none;/s
   )
 })
