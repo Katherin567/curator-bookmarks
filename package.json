@@ -28,7 +28,7 @@
     "pack:zip": "npm run validate && node scripts/pack-release.mjs",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:build && node --test .tmp-test/tests/*.test.js",
-    "test:build": "tsc -p tsconfig.test.json"
+    "test:build": "node -e \"require('node:fs').rmSync('.tmp-test', { recursive: true, force: true })\" && tsc -p tsconfig.test.json"
   },
   "devDependencies": {
     "@crxjs/vite-plugin": "^2.4.0",
