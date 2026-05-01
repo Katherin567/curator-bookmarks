@@ -583,7 +583,6 @@ function bindEvents() {
   dom.aiApiStyle?.addEventListener('change', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
   dom.aiTimeoutMs?.addEventListener('input', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
   dom.aiBatchSize?.addEventListener('input', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
-  dom.aiAutoSelectHigh?.addEventListener('change', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
   dom.aiAllowRemoteParser?.addEventListener('change', handleAiRemoteParserChange)
   dom.aiAutoAnalyzeBookmarks?.addEventListener('change', handleAutoAnalyzeBookmarksChange)
   dom.inboxAutoMoveToRecommendedFolder?.addEventListener('change', () => {
@@ -604,7 +603,6 @@ function bindEvents() {
   dom.contentSnapshotLocalOnly?.addEventListener('change', () => {
     void saveContentSnapshotSettingsFromDom()
   })
-  dom.aiSystemPrompt?.addEventListener('input', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
   dom.availabilityCopySummary?.addEventListener('click', handleAvailabilityCopySummary)
   dom.availabilityAction?.addEventListener('click', handleAvailabilityAction)
   dom.availabilityPauseAction?.addEventListener('click', toggleAvailabilityPause)
@@ -1994,10 +1992,10 @@ function syncAiNamingSettingsDraftFromDom({ markDirty = false } = {}) {
     apiStyle: dom.aiApiStyle.value,
     timeoutMs: dom.aiTimeoutMs.value,
     batchSize: dom.aiBatchSize.value,
-    autoSelectHighConfidence: dom.aiAutoSelectHigh?.checked ?? aiNamingManagerState.settings.autoSelectHighConfidence,
+    autoSelectHighConfidence: true,
     allowRemoteParsing: Boolean(dom.aiAllowRemoteParser?.checked),
     autoAnalyzeBookmarks: Boolean(dom.aiAutoAnalyzeBookmarks?.checked),
-    systemPrompt: dom.aiSystemPrompt?.value ?? aiNamingManagerState.settings.systemPrompt
+    systemPrompt: ''
   })
 
   if (markDirty) {
@@ -2645,9 +2643,6 @@ function renderAiNamingSection() {
   if (dom.aiBatchSize && dom.aiBatchSize !== document.activeElement) {
     dom.aiBatchSize.value = String(settings.batchSize)
   }
-  if (dom.aiAutoSelectHigh) {
-    dom.aiAutoSelectHigh.checked = Boolean(settings.autoSelectHighConfidence)
-  }
   if (dom.aiAllowRemoteParser) {
     dom.aiAllowRemoteParser.checked = Boolean(settings.allowRemoteParsing)
     dom.aiAllowRemoteParser.disabled =
@@ -2717,9 +2712,6 @@ function renderAiNamingSection() {
     dom.inboxWorkflowStatus.textContent = statusText
   }
   renderContentSnapshotSettings()
-  if (dom.aiSystemPrompt && dom.aiSystemPrompt !== document.activeElement) {
-    dom.aiSystemPrompt.value = settings.systemPrompt
-  }
 
   const hasRequiredConfig = Boolean(settings.baseUrl && settings.apiKey && settings.model)
   const configTone = aiNamingState.settingsDirty

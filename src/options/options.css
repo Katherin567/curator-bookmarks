@@ -3295,8 +3295,7 @@ body.dashboard-fullscreen-active {
 
 .ai-provider-input,
 .ai-provider-select,
-.ai-model-list-textarea,
-.ai-settings-textarea {
+.ai-model-list-textarea {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 16px;
@@ -3312,15 +3311,13 @@ body.dashboard-fullscreen-active {
 }
 
 .ai-provider-input::placeholder,
-.ai-model-list-textarea::placeholder,
-.ai-settings-textarea::placeholder {
+.ai-model-list-textarea::placeholder {
   color: var(--text-dim);
 }
 
 .ai-provider-input:focus-visible,
 .ai-provider-select:focus-visible,
-.ai-model-list-textarea:focus-visible,
-.ai-settings-textarea:focus-visible {
+.ai-model-list-textarea:focus-visible {
   outline: none;
   border-color: rgba(245, 245, 247, 0.34);
   box-shadow: 0 0 0 3px rgba(245, 245, 247, 0.06);
@@ -3554,7 +3551,6 @@ body.dashboard-fullscreen-active {
   transform: translate(-50%, 0);
 }
 
-.ai-settings-textarea,
 .ai-model-list-textarea {
   min-height: 118px;
   padding: 12px 14px;
@@ -4564,7 +4560,6 @@ body.dashboard-fullscreen-active {
 .ai-provider-input,
 .ai-provider-select,
 .ai-model-list-textarea,
-.ai-settings-textarea,
 .scope-picker-trigger,
 .options-select,
 .duplicate-folder-select {
