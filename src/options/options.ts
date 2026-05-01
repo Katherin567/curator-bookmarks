@@ -3165,13 +3165,15 @@ async function handleFullBackupRestore(mode: BackupRestoreMode) {
   const modeLabel = mode === 'tagsOnly'
     ? '只恢复标签数据'
     : mode === 'newTabOnly'
-      ? '只恢复新标签页配置'
+      ? '只恢复新标签页设置'
       : '恢复全部可安全恢复的数据'
   const confirmed = await requestConfirmation({
     title: `${modeLabel}？`,
     copy: mode === 'safeFull'
       ? '恢复前会自动创建本地备份；缺失书签只会复制到新的恢复文件夹，不会替换整个 Chrome 书签树，也不会恢复 API Key。'
-      : '恢复会写入对应的本地扩展数据，不会恢复 API Key。',
+      : mode === 'newTabOnly'
+        ? '恢复会写入书签来源、布局、搜索、时间和背景设置；不会恢复背景媒体缓存，也不会恢复 API Key。'
+        : '恢复会写入对应的本地扩展数据，不会恢复 API Key。',
     confirmLabel: modeLabel,
     cancelLabel: '取消',
     tone: mode === 'safeFull' ? 'warning' : 'danger',

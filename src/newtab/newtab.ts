@@ -3926,11 +3926,14 @@ function syncBackgroundSettingsControls(): void {
     maskBlurInput.value = String(settings.maskBlur)
     maskBlurInput.disabled = !settings.maskEnabled
   }
+  setTextContent('background-mask-blur-value', `${settings.maskBlur}px`)
   if (maskStyleRow instanceof HTMLElement) {
     maskStyleRow.hidden = !settings.maskEnabled
+    maskStyleRow.classList.remove('setting-row-disabled')
   }
   if (maskBlurRow instanceof HTMLElement) {
     maskBlurRow.hidden = !settings.maskEnabled
+    maskBlurRow.classList.remove('setting-row-disabled')
   }
 }
 
@@ -4530,6 +4533,15 @@ function syncSearchSettingsControls(): void {
   const heightInput = document.getElementById('search-height')
   const offsetYInput = document.getElementById('search-offset-y')
   const backgroundInput = document.getElementById('search-background')
+  const dependentControls = [
+    openInput,
+    engineInput,
+    placeholderInput,
+    widthInput,
+    heightInput,
+    offsetYInput,
+    backgroundInput
+  ]
 
   if (enabledInput instanceof HTMLInputElement) {
     enabledInput.checked = settings.enabled
@@ -4561,6 +4573,18 @@ function syncSearchSettingsControls(): void {
   if (backgroundInput instanceof HTMLInputElement) {
     backgroundInput.value = String(settings.background)
     backgroundInput.disabled = !settings.enabled
+  }
+
+  setTextContent('search-width-value', `${settings.width}vw`)
+  setTextContent('search-height-value', `${settings.height}px`)
+  setTextContent('search-offset-y-value', `${settings.offsetY}px`)
+  setTextContent('search-background-value', `${settings.background}%`)
+
+  for (const control of dependentControls) {
+    const row = control instanceof HTMLElement
+      ? control.closest<HTMLElement>('.setting-row')
+      : null
+    row?.classList.toggle('setting-row-disabled', !settings.enabled)
   }
 }
 
@@ -5049,7 +5073,9 @@ function handlePresetCardClick(event: Event): void {
 function syncPresetCardSelection(): void {
   const cards = document.querySelectorAll<HTMLElement>('.icon-preset-card')
   for (const card of cards) {
-    card.classList.toggle('selected', card.dataset.preset === state.iconSettings.preset)
+    const selected = card.dataset.preset === state.iconSettings.preset
+    card.classList.toggle('selected', selected)
+    card.setAttribute('aria-pressed', String(selected))
   }
 }
 
@@ -5148,6 +5174,8 @@ function renderIconPresetCards(): void {
     card.className = 'icon-preset-card'
     card.type = 'button'
     card.dataset.preset = key
+    card.setAttribute('aria-pressed', 'false')
+    card.setAttribute('aria-label', `${meta.name}布局，${meta.desc}，${meta.detail}`)
 
     const preview = document.createElement('div')
     preview.className = 'icon-preset-preview'
@@ -5300,6 +5328,14 @@ function syncTimeSettingsControls(): void {
   const dateFormatInput = document.getElementById('time-date-format')
   const timeZoneInput = document.getElementById('time-time-zone')
   const displayInput = document.getElementById('time-display-mode')
+  const dependentControls = [
+    secondsInput,
+    hour12Input,
+    sizeInput,
+    dateFormatInput,
+    timeZoneInput,
+    displayInput
+  ]
 
   if (enabledInput instanceof HTMLInputElement) {
     enabledInput.checked = settings.enabled
@@ -5330,6 +5366,16 @@ function syncTimeSettingsControls(): void {
   }
 
   setTextContent('time-clock-size-value', `${settings.clockSize}%`)
+
+  for (const control of dependentControls) {
+    const disabled = control instanceof HTMLInputElement || control instanceof HTMLSelectElement
+      ? control.disabled
+      : !settings.enabled
+    const row = control instanceof HTMLElement
+      ? control.closest<HTMLElement>('.setting-row')
+      : null
+    row?.classList.toggle('setting-row-disabled', disabled)
+  }
 }
 
 async function saveTimeSettings(): Promise<void> {
