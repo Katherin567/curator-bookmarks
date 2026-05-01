@@ -39,6 +39,19 @@ import {
   upsertBookmarkTagFromAnalysis,
   type BookmarkTagIndex
 } from '../shared/bookmark-tags.js'
+import {
+  normalizeInboxSettings,
+  saveInboxSettings
+} from '../shared/inbox.js'
+import {
+  buildBackupRestorePreview,
+  createAutoBackupBeforeDangerousOperation,
+  createCuratorBackupFile,
+  getBackupFileName,
+  parseCuratorBackupFile,
+  restoreCuratorBackup,
+  type BackupRestoreMode
+} from '../shared/backup.js'
 import { cancelNavigationCheck, requestNavigationCheck } from '../shared/messages.js'
 import { renderDotMatrixLoader } from '../shared/dot-matrix-loader.js'
 import {
@@ -77,6 +90,12 @@ import {
   normalizePageContentContext
 } from './sections/content-extraction.js'
 import {
+  buildContentSnapshotSearchMapWithFullText,
+  normalizeContentSnapshotIndex,
+  normalizeContentSnapshotSettings,
+  saveContentSnapshotSettings
+} from '../shared/content-snapshots.js'
+import {
   SECTION_META,
   NAVIGATION_TIMEOUT_MS,
   NAVIGATION_RETRY_TIMEOUT_MS,
@@ -94,8 +113,11 @@ import {
 import {
   availabilityState,
   managerState,
+  folderCleanupState,
   aiNamingState,
   aiNamingManagerState,
+  contentSnapshotState,
+  backupRestoreState,
   createEmptyIgnoreRules,
   createEmptyRedirectCache
 } from './shared-options/state.js'
@@ -145,6 +167,14 @@ import {
   clearDuplicateSelection,
   deleteSelectedDuplicates
 } from './sections/duplicates.js'
+import {
+  hydrateFolderCleanupState,
+  analyzeFolderCleanupSuggestions,
+  rescanFolderCleanupSuggestions,
+  renderFolderCleanupSection,
+  handleFolderCleanupClick,
+  handleFolderCleanupPreviewClick
+} from './sections/folder-cleanup.js'
 import {
   normalizeRedirectCache,
   saveRedirectCache,
@@ -198,6 +228,7 @@ import {
   handleDashboardPointerUp,
   handleDashboardTagPointerOut,
   handleDashboardTagPointerOver,
+  hydrateDashboardSavedSearches,
   moveSelectedDashboardBookmarks,
   removeDashboardSelectionIds,
   renderDashboardSection
@@ -225,16 +256,17 @@ const LEGACY_AI_NAMING_CACHE_STORAGE_KEYS = [
 ]
 
 const SHORTCUTS_SETTINGS_URL = 'chrome://extensions/shortcuts'
+const NEW_TAB_SHORTCUT_FOLDER_TITLE = '标签页'
 const SHORTCUT_COMMAND_ORDER = [
-  '_execute_action',
+  'curator-capture-inbox',
   'curator-open-search',
   'curator-open-smart-classifier',
   'curator-toggle-auto-analyze'
 ]
 const SHORTCUT_COMMAND_LABELS: Record<string, { title: string; detail: string }> = {
-  _execute_action: {
-    title: '打开 Popup',
-    detail: '打开 Curator 弹窗。'
+  'curator-capture-inbox': {
+    title: '直接收藏到 Inbox',
+    detail: '保存当前网页到 Inbox / 待整理，并在后台分析归类。'
   },
   'curator-open-search': {
     title: '打开并聚焦搜索',
@@ -289,6 +321,12 @@ const dashboardCallbacks = {
   recycleCallbacks
 }
 
+const folderCleanupCallbacks = {
+  renderAvailabilitySection,
+  hydrateAvailabilityCatalog,
+  confirm: requestConfirmation
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   cacheDom()
   bindEvents()
@@ -297,8 +335,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.history.scrollRestoration = 'manual'
   }
 
-  if (!SECTION_META[getCurrentSectionKey()]) {
-    window.history.replaceState(null, '', '#general')
+  const initialSectionKey = normalizeSectionKey(getCurrentSectionKey())
+  if (initialSectionKey !== getCurrentSectionKey()) {
+    window.history.replaceState(null, '', `#${initialSectionKey}`)
   }
 
   syncPageSection()
@@ -314,6 +353,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   void hydrateShortcutCommands()
 
   await hydratePersistentState()
+  await hydrateDashboardSavedSearches()
   await hydrateAvailabilityCatalog()
   await hydrateProbePermission()
   await hydrateAiNamingPermissionState()
@@ -333,7 +373,11 @@ async function hydratePersistentState() {
       STORAGE_KEYS.pendingAvailabilityResults,
       STORAGE_KEYS.recycleBin,
       STORAGE_KEYS.aiProviderSettings,
-      STORAGE_KEYS.bookmarkTagIndex
+      STORAGE_KEYS.bookmarkTagIndex,
+      STORAGE_KEYS.folderCleanupState,
+      STORAGE_KEYS.inboxSettings,
+      STORAGE_KEYS.contentSnapshotSettings,
+      STORAGE_KEYS.contentSnapshotIndex
     ])
 
     managerState.ignoreRules = normalizeIgnoreRules(stored[STORAGE_KEYS.ignoreRules])
@@ -344,6 +388,14 @@ async function hydratePersistentState() {
     managerState.recycleBin = normalizeRecycleBin(stored[STORAGE_KEYS.recycleBin])
     aiNamingManagerState.settings = normalizeAiNamingSettings(stored[STORAGE_KEYS.aiProviderSettings])
     aiNamingState.tagIndex = normalizeBookmarkTagIndex(stored[STORAGE_KEYS.bookmarkTagIndex])
+    contentSnapshotState.settings = normalizeContentSnapshotSettings(stored[STORAGE_KEYS.contentSnapshotSettings])
+    contentSnapshotState.index = normalizeContentSnapshotIndex(stored[STORAGE_KEYS.contentSnapshotIndex])
+    contentSnapshotState.searchTextMap = await buildContentSnapshotSearchMapWithFullText(contentSnapshotState.index, {
+      includeFullText: contentSnapshotState.settings.fullTextSearchEnabled,
+      maxRecords: 1000
+    }).catch(() => new Map<string, string>())
+    hydrateFolderCleanupState(stored[STORAGE_KEYS.folderCleanupState])
+    managerState.inboxSettings = normalizeInboxSettings(stored[STORAGE_KEYS.inboxSettings])
     void removeLocalStorage(LEGACY_AI_NAMING_CACHE_STORAGE_KEYS).catch(() => {})
   } catch (error) {
     availabilityState.lastError =
@@ -363,7 +415,7 @@ async function saveAiNamingSettings(settings = aiNamingManagerState.settings) {
 
 function syncPageSection() {
   const rawKey = getCurrentSectionKey()
-  const key = SECTION_META[rawKey] ? rawKey : 'general'
+  const key = normalizeSectionKey(rawKey)
   const section = SECTION_META[key]
   const links = document.querySelectorAll('[data-section-link]')
   const panels = document.querySelectorAll<HTMLElement>('[data-section-panel]')
@@ -403,7 +455,7 @@ function handleSectionNavigationClick(event) {
 
   const link = event.target.closest('a[data-section-link]') as HTMLAnchorElement | null
   const key = link?.getAttribute('data-section-link') || ''
-  if (!link || !SECTION_META[key]) {
+  if (!link || !SECTION_META[normalizeSectionKey(key)]) {
     return
   }
 
@@ -488,6 +540,12 @@ function bindEvents() {
   dom.aiTagImport?.addEventListener('click', () => dom.aiTagImportInput?.click())
   dom.aiTagImportInput?.addEventListener('change', handleBookmarkTagImport)
   dom.aiTagClear?.addEventListener('click', handleBookmarkTagClear)
+  dom.backupExport?.addEventListener('click', handleFullBackupExport)
+  dom.backupImport?.addEventListener('click', () => dom.backupImportInput?.click())
+  dom.backupImportInput?.addEventListener('change', handleFullBackupImport)
+  dom.backupRestoreTags?.addEventListener('click', () => handleFullBackupRestore('tagsOnly'))
+  dom.backupRestoreNewTab?.addEventListener('click', () => handleFullBackupRestore('newTabOnly'))
+  dom.backupRestoreSafeFull?.addEventListener('click', () => handleFullBackupRestore('safeFull'))
   dom.aiBaseUrl?.addEventListener('input', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
   dom.aiApiKey?.addEventListener('input', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
   dom.aiRevealApiKey?.addEventListener('change', handleAiRevealApiKeyChange)
@@ -504,10 +562,26 @@ function bindEvents() {
   dom.aiApiStyle?.addEventListener('change', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
   dom.aiTimeoutMs?.addEventListener('input', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
   dom.aiBatchSize?.addEventListener('input', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
-  dom.aiAutoSelectHigh?.addEventListener('change', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
   dom.aiAllowRemoteParser?.addEventListener('change', handleAiRemoteParserChange)
   dom.aiAutoAnalyzeBookmarks?.addEventListener('change', handleAutoAnalyzeBookmarksChange)
-  dom.aiSystemPrompt?.addEventListener('input', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
+  dom.inboxAutoMoveToRecommendedFolder?.addEventListener('change', () => {
+    void handleInboxWorkflowSettingChange('autoMoveToRecommendedFolder')
+  })
+  dom.inboxTagOnlyNoAutoMove?.addEventListener('change', () => {
+    void handleInboxWorkflowSettingChange('tagOnlyNoAutoMove')
+  })
+  dom.contentSnapshotEnabled?.addEventListener('change', () => {
+    void saveContentSnapshotSettingsFromDom()
+  })
+  dom.contentSnapshotFullText?.addEventListener('change', () => {
+    void saveContentSnapshotSettingsFromDom()
+  })
+  dom.contentSnapshotSearchFullText?.addEventListener('change', () => {
+    void saveContentSnapshotSettingsFromDom()
+  })
+  dom.contentSnapshotLocalOnly?.addEventListener('change', () => {
+    void saveContentSnapshotSettingsFromDom()
+  })
   dom.availabilityCopySummary?.addEventListener('click', handleAvailabilityCopySummary)
   dom.availabilityAction?.addEventListener('click', handleAvailabilityAction)
   dom.availabilityPauseAction?.addEventListener('click', toggleAvailabilityPause)
@@ -557,6 +631,13 @@ function bindEvents() {
   dom.duplicateStrategyControls?.addEventListener('click', (event) => handleDuplicateToolbarClick(event, duplicatesCallbacks))
   dom.duplicateClearSelection?.addEventListener('click', () => clearDuplicateSelection(duplicatesCallbacks))
   dom.duplicateDeleteSelection?.addEventListener('click', () => deleteSelectedDuplicates(duplicatesCallbacks))
+  dom.folderCleanupAnalyze?.addEventListener('click', () => {
+    void rescanFolderCleanupSuggestions(folderCleanupCallbacks)
+  })
+  dom.folderCleanupResults?.addEventListener('click', (event) => {
+    handleFolderCleanupPreviewClick(event, folderCleanupCallbacks)
+    void handleFolderCleanupClick(event, folderCleanupCallbacks)
+  })
   dom.ignoreBookmarkRules?.addEventListener('click', (event) => handleIgnoreRulesClick(event, ignoreCallbacks))
   dom.ignoreDomainRules?.addEventListener('click', (event) => handleIgnoreRulesClick(event, ignoreCallbacks))
   dom.ignoreFolderRules?.addEventListener('click', (event) => handleIgnoreRulesClick(event, ignoreCallbacks))
@@ -636,6 +717,14 @@ function bindEvents() {
 
 function getCurrentSectionKey() {
   return window.location.hash.replace(/^#/, '') || 'general'
+}
+
+function normalizeSectionKey(key: string): keyof typeof SECTION_META {
+  if (key === 'ai-tag-data') {
+    return 'backup'
+  }
+
+  return key in SECTION_META ? (key as keyof typeof SECTION_META) : 'general'
 }
 
 function handleKeydown(event) {
@@ -864,22 +953,88 @@ function handleFailedResultAction(event) {
   demoteFailedResultToReview(bookmarkId)
 }
 
-async function hydrateAvailabilityCatalog({ preserveResults = false } = {}) {
+function collectNewTabShortcutFolderIds(
+  rootNode: chrome.bookmarks.BookmarkTreeNode | null | undefined,
+  rawFolderSettings?: unknown
+): Set<string> {
+  const excludedFolderIds = new Set<string>()
+  if (!rootNode) {
+    return excludedFolderIds
+  }
+
+  const selectedFolderIds = new Set(getSelectedNewTabFolderIds(rawFolderSettings))
+
+  function walk(
+    node: chrome.bookmarks.BookmarkTreeNode,
+    parentId = '',
+    insideShortcutFolder = false
+  ) {
+    if (node.url) {
+      return
+    }
+
+    const folderId = String(node.id || '').trim()
+    const effectiveParentId = String(node.parentId || parentId || '').trim()
+    const title = String(node.title || '').trim()
+    const isShortcutFolder =
+      title === NEW_TAB_SHORTCUT_FOLDER_TITLE &&
+      (effectiveParentId === BOOKMARKS_BAR_ID || selectedFolderIds.has(folderId))
+    const shouldExclude = insideShortcutFolder || isShortcutFolder
+
+    if (folderId && shouldExclude) {
+      excludedFolderIds.add(folderId)
+    }
+
+    for (const child of node.children || []) {
+      walk(child, folderId, shouldExclude)
+    }
+  }
+
+  walk(rootNode)
+  return excludedFolderIds
+}
+
+function getSelectedNewTabFolderIds(rawFolderSettings?: unknown): string[] {
+  if (!rawFolderSettings || typeof rawFolderSettings !== 'object' || Array.isArray(rawFolderSettings)) {
+    return []
+  }
+
+  const selectedFolderIds = (rawFolderSettings as Record<string, unknown>).selectedFolderIds
+  if (!Array.isArray(selectedFolderIds)) {
+    return []
+  }
+
+  return selectedFolderIds
+    .map((folderId) => String(folderId || '').trim())
+    .filter(Boolean)
+}
+
+async function hydrateAvailabilityCatalog({ preserveResults = false, analyzeFolderCleanup = true } = {}) {
   availabilityState.catalogLoading = true
   availabilityState.lastError = ''
   scheduleAvailabilityRender()
 
   try {
-    const tree = await getBookmarkTree()
+    const [tree, newTabStorage] = await Promise.all([
+      getBookmarkTree(),
+      getLocalStorage([STORAGE_KEYS.newTabFolderSettings])
+    ])
     const rootNode = Array.isArray(tree) ? tree[0] : tree
     const extracted = extractBookmarkData(rootNode)
     const bookmarks = extracted.bookmarks
+    const excludedDuplicateFolderIds = collectNewTabShortcutFolderIds(
+      rootNode,
+      newTabStorage[STORAGE_KEYS.newTabFolderSettings]
+    )
 
+    folderCleanupState.rootNode = rootNode
     availabilityState.allBookmarks = bookmarks
     availabilityState.allFolders = extracted.folders
     availabilityState.bookmarkMap = extracted.bookmarkMap
     availabilityState.folderMap = extracted.folderMap
-    managerState.duplicateGroups = buildDuplicateGroups(bookmarks)
+    managerState.duplicateGroups = buildDuplicateGroups(bookmarks, {
+      excludedFolderIds: excludedDuplicateFolderIds
+    })
     applyAvailabilityScope({ preserveResults })
     syncAiNamingCatalog({ preserveResults })
   } catch (error) {
@@ -894,11 +1049,16 @@ async function hydrateAvailabilityCatalog({ preserveResults = false } = {}) {
     availabilityState.skippedCount = 0
     resetDetectionResults()
     managerState.duplicateGroups = []
+    folderCleanupState.rootNode = null
+    folderCleanupState.suggestions = []
     syncAiNamingCatalog({ preserveResults: false })
     availabilityState.lastError =
       error instanceof Error ? error.message : '书签列表读取失败，请刷新页面后重试。'
   } finally {
     availabilityState.catalogLoading = false
+    if (analyzeFolderCleanup && folderCleanupState.rootNode) {
+      await analyzeFolderCleanupSuggestions(folderCleanupCallbacks)
+    }
     renderAvailabilitySection()
   }
 }
@@ -1795,7 +1955,7 @@ function renderAvailabilitySection() {
 }
 
 function renderActiveOptionsSection() {
-  const activeSection = SECTION_META[getCurrentSectionKey()] ? getCurrentSectionKey() : 'general'
+  const activeSection = normalizeSectionKey(getCurrentSectionKey())
 
   if (activeSection === 'availability') {
     renderAvailabilitySelectionGroup()
@@ -1830,8 +1990,9 @@ function renderActiveOptionsSection() {
     return
   }
 
-  if (activeSection === 'ai-tag-data') {
+  if (activeSection === 'backup') {
     renderBookmarkTagDataCard()
+    renderBackupRestoreSection()
     return
   }
 
@@ -1842,6 +2003,11 @@ function renderActiveOptionsSection() {
 
   if (activeSection === 'duplicates') {
     renderDuplicateSection()
+    return
+  }
+
+  if (activeSection === 'folder-cleanup') {
+    renderFolderCleanupSection(folderCleanupCallbacks)
     return
   }
 
@@ -1869,10 +2035,10 @@ function syncAiNamingSettingsDraftFromDom({ markDirty = false } = {}) {
     apiStyle: dom.aiApiStyle.value,
     timeoutMs: dom.aiTimeoutMs.value,
     batchSize: dom.aiBatchSize.value,
-    autoSelectHighConfidence: dom.aiAutoSelectHigh?.checked ?? aiNamingManagerState.settings.autoSelectHighConfidence,
+    autoSelectHighConfidence: true,
     allowRemoteParsing: Boolean(dom.aiAllowRemoteParser?.checked),
     autoAnalyzeBookmarks: Boolean(dom.aiAutoAnalyzeBookmarks?.checked),
-    systemPrompt: dom.aiSystemPrompt?.value ?? aiNamingManagerState.settings.systemPrompt
+    systemPrompt: ''
   })
 
   if (markDirty) {
@@ -1882,6 +2048,58 @@ function syncAiNamingSettingsDraftFromDom({ markDirty = false } = {}) {
   }
 
   return aiNamingManagerState.settings
+}
+
+async function saveContentSnapshotSettingsFromDom() {
+  const nextSettings = normalizeContentSnapshotSettings({
+    ...contentSnapshotState.settings,
+    enabled: Boolean(dom.contentSnapshotEnabled?.checked),
+    saveFullText: Boolean(dom.contentSnapshotFullText?.checked),
+    fullTextSearchEnabled: Boolean(dom.contentSnapshotSearchFullText?.checked),
+    localOnlyNoAiUpload: Boolean(dom.contentSnapshotLocalOnly?.checked)
+  })
+
+  try {
+    contentSnapshotState.settings = await saveContentSnapshotSettings(nextSettings)
+    contentSnapshotState.searchTextMap = await buildContentSnapshotSearchMapWithFullText(contentSnapshotState.index, {
+      includeFullText: contentSnapshotState.settings.fullTextSearchEnabled,
+      maxRecords: 1000
+    }).catch(() => new Map<string, string>())
+    contentSnapshotState.statusMessage = '网页快照设置已保存。'
+  } catch (error) {
+    contentSnapshotState.statusMessage =
+      error instanceof Error ? `网页快照设置保存失败：${error.message}` : '网页快照设置保存失败。'
+  } finally {
+    renderAiNamingSection()
+    renderDashboardSection()
+  }
+}
+
+function renderContentSnapshotSettings() {
+  const settings = contentSnapshotState.settings
+  const snapshotCount = Object.keys(contentSnapshotState.index.records || {}).length
+  if (dom.contentSnapshotEnabled) {
+    dom.contentSnapshotEnabled.checked = Boolean(settings.enabled)
+  }
+  if (dom.contentSnapshotFullText) {
+    dom.contentSnapshotFullText.checked = Boolean(settings.saveFullText)
+    dom.contentSnapshotFullText.disabled = !settings.enabled
+  }
+  if (dom.contentSnapshotSearchFullText) {
+    dom.contentSnapshotSearchFullText.checked = Boolean(settings.fullTextSearchEnabled)
+    dom.contentSnapshotSearchFullText.disabled = !settings.enabled || !settings.saveFullText
+  }
+  if (dom.contentSnapshotLocalOnly) {
+    dom.contentSnapshotLocalOnly.checked = Boolean(settings.localOnlyNoAiUpload)
+    dom.contentSnapshotLocalOnly.disabled = !settings.enabled
+  }
+  if (dom.contentSnapshotStatus) {
+    const fullTextCopy = settings.saveFullText
+      ? '已开启全文保存；超过 20KB 的单条全文写入 IndexedDB。'
+      : '全文未保存，仅使用摘要、标题和链接信息。'
+    dom.contentSnapshotStatus.textContent = contentSnapshotState.statusMessage ||
+      `已保存 ${snapshotCount} 条网页快照。${fullTextCopy}`
+  }
 }
 
 function resetAiNamingConnectivityState() {
@@ -2320,6 +2538,38 @@ async function handleAutoAnalyzeBookmarksChange() {
   }
 }
 
+async function handleInboxWorkflowSettingChange(
+  source: 'autoMoveToRecommendedFolder' | 'tagOnlyNoAutoMove'
+) {
+  if (!dom.inboxAutoMoveToRecommendedFolder || !dom.inboxTagOnlyNoAutoMove) {
+    return
+  }
+
+  const previousSettings = normalizeInboxSettings(managerState.inboxSettings)
+  const tagOnlyNoAutoMove = Boolean(dom.inboxTagOnlyNoAutoMove.checked)
+  const autoMoveToRecommendedFolder = source === 'tagOnlyNoAutoMove' && tagOnlyNoAutoMove
+    ? false
+    : Boolean(dom.inboxAutoMoveToRecommendedFolder.checked)
+
+  try {
+    managerState.inboxSettingsStatus = '正在保存 Inbox 设置…'
+    renderAiNamingSection()
+    managerState.inboxSettings = await saveInboxSettings({
+      ...previousSettings,
+      autoMoveToRecommendedFolder,
+      tagOnlyNoAutoMove
+    })
+    managerState.inboxSettingsStatus = 'Inbox 设置已保存。'
+  } catch (error) {
+    managerState.inboxSettings = previousSettings
+    managerState.inboxSettingsStatus = error instanceof Error
+      ? error.message
+      : 'Inbox 设置保存失败，请稍后重试。'
+  } finally {
+    renderAiNamingSection()
+  }
+}
+
 async function handleAiRemoteParserChange() {
   if (!dom.aiAllowRemoteParser) {
     return
@@ -2436,9 +2686,6 @@ function renderAiNamingSection() {
   if (dom.aiBatchSize && dom.aiBatchSize !== document.activeElement) {
     dom.aiBatchSize.value = String(settings.batchSize)
   }
-  if (dom.aiAutoSelectHigh) {
-    dom.aiAutoSelectHigh.checked = Boolean(settings.autoSelectHighConfidence)
-  }
   if (dom.aiAllowRemoteParser) {
     dom.aiAllowRemoteParser.checked = Boolean(settings.allowRemoteParsing)
     dom.aiAllowRemoteParser.disabled =
@@ -2474,9 +2721,40 @@ function renderAiNamingSection() {
     dom.aiAutoAnalyzeStatus.className = `options-chip ai-inline-status ${autoAnalyzeEnabled ? 'success' : 'muted'}`
     dom.aiAutoAnalyzeStatus.textContent = autoAnalyzeEnabled ? '自动分析开启' : '未开启'
   }
-  if (dom.aiSystemPrompt && dom.aiSystemPrompt !== document.activeElement) {
-    dom.aiSystemPrompt.value = settings.systemPrompt
+  const inboxSettings = normalizeInboxSettings(managerState.inboxSettings)
+  if (dom.inboxAutoMoveToRecommendedFolder) {
+    dom.inboxAutoMoveToRecommendedFolder.checked = Boolean(inboxSettings.autoMoveToRecommendedFolder)
+    dom.inboxAutoMoveToRecommendedFolder.disabled =
+      Boolean(inboxSettings.tagOnlyNoAutoMove) ||
+      aiNamingState.running ||
+      aiNamingState.applying ||
+      aiNamingState.requestingPermission
   }
+  if (dom.inboxTagOnlyNoAutoMove) {
+    dom.inboxTagOnlyNoAutoMove.checked = Boolean(inboxSettings.tagOnlyNoAutoMove)
+    dom.inboxTagOnlyNoAutoMove.disabled =
+      aiNamingState.running ||
+      aiNamingState.applying ||
+      aiNamingState.requestingPermission
+  }
+  if (dom.inboxWorkflowStatus) {
+    const statusText = managerState.inboxSettingsStatus ||
+      (inboxSettings.tagOnlyNoAutoMove
+        ? '只生成标签'
+        : inboxSettings.autoMoveToRecommendedFolder
+          ? '自动移动开启'
+          : '保留在 Inbox')
+    const statusTone = managerState.inboxSettingsStatus
+      ? managerState.inboxSettingsStatus.includes('失败') || managerState.inboxSettingsStatus.includes('Error')
+        ? 'warning'
+        : 'success'
+      : inboxSettings.autoMoveToRecommendedFolder && !inboxSettings.tagOnlyNoAutoMove
+        ? 'success'
+        : 'muted'
+    dom.inboxWorkflowStatus.className = `options-chip ai-inline-status ${statusTone}`
+    dom.inboxWorkflowStatus.textContent = statusText
+  }
+  renderContentSnapshotSettings()
 
   const hasRequiredConfig = Boolean(settings.baseUrl && settings.apiKey && settings.model)
   const configTone = aiNamingState.settingsDirty
@@ -2702,10 +2980,10 @@ async function handleBookmarkTagExport() {
       payload
     )
     aiNamingState.tagDataStatus = `已导出 ${payload.records.length} 条标签记录。`
-    renderAiNamingSection()
+    renderActiveOptionsSection()
   } catch (error) {
     aiNamingState.tagDataStatus = error instanceof Error ? error.message : '标签数据导出失败。'
-    renderAiNamingSection()
+    renderActiveOptionsSection()
   }
 }
 
@@ -2732,7 +3010,7 @@ async function handleBookmarkTagImport(event) {
     if (input) {
       input.value = ''
     }
-    renderAiNamingSection()
+    renderActiveOptionsSection()
   }
 }
 
@@ -2754,10 +3032,151 @@ async function handleBookmarkTagClear() {
     await clearBookmarkTagIndex()
     aiNamingState.tagIndex = normalizeBookmarkTagIndex(null)
     aiNamingState.tagDataStatus = '已清空标签数据。'
-    renderAiNamingSection()
+    renderActiveOptionsSection()
   } catch (error) {
     aiNamingState.tagDataStatus = error instanceof Error ? error.message : '标签数据清空失败。'
-    renderAiNamingSection()
+    renderActiveOptionsSection()
+  }
+}
+
+function renderBackupRestoreSection() {
+  if (!dom.backupPreview) {
+    return
+  }
+
+  const hasBackup = Boolean(backupRestoreState.backup && backupRestoreState.preview)
+  const busy = Boolean(backupRestoreState.restoring)
+  if (dom.backupStatus) {
+    dom.backupStatus.textContent = backupRestoreState.status || ''
+  }
+  if (dom.backupExport) {
+    dom.backupExport.disabled = busy
+  }
+  if (dom.backupImport) {
+    dom.backupImport.disabled = busy
+  }
+  if (dom.backupRestoreTags) {
+    dom.backupRestoreTags.disabled = !hasBackup || busy
+  }
+  if (dom.backupRestoreNewTab) {
+    dom.backupRestoreNewTab.disabled = !hasBackup || busy
+  }
+  if (dom.backupRestoreSafeFull) {
+    dom.backupRestoreSafeFull.disabled = !hasBackup || busy
+  }
+
+  if (!backupRestoreState.preview) {
+    dom.backupPreview.innerHTML = '<div class="detect-empty">请选择备份文件进行预览。</div>'
+    return
+  }
+
+  const preview = backupRestoreState.preview
+  const warnings = preview.warnings.length
+    ? `<ul class="detect-result-evidence">${preview.warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join('')}</ul>`
+    : '<p class="detect-result-detail">未发现阻塞恢复的问题。</p>'
+  dom.backupPreview.innerHTML = `
+    <article class="detect-result-card">
+      <div class="detect-result-copy">
+        <strong>${escapeHtml(preview.fileName || '已导入备份文件')}</strong>
+        <div class="detect-result-detail">导出时间：${escapeHtml(preview.exportedAt || '未知')} · 扩展版本：${escapeHtml(preview.extensionVersion || '未知')}</div>
+        <div class="detect-result-detail">书签 URL：${preview.counts.bookmarkUrls}，当前缺失：${preview.counts.missingBookmarkUrls}；标签记录：${preview.counts.tagRecords}，可匹配：${preview.counts.tagMatched}，无法匹配：${preview.counts.tagUnmatched}</div>
+        <div class="detect-result-detail">回收站：${preview.counts.recycleEntries}；忽略规则：${preview.counts.ignoreRules}；重定向历史：${preview.counts.redirectEntries}；新标签页配置：${preview.counts.newTabSections}</div>
+        ${warnings}
+      </div>
+    </article>
+  `
+}
+
+async function handleFullBackupExport() {
+  backupRestoreState.status = '正在生成完整备份...'
+  renderBackupRestoreSection()
+
+  try {
+    const now = Date.now()
+    const payload = await createCuratorBackupFile('manual', now)
+    downloadJsonFile(getBackupFileName(now), payload)
+    backupRestoreState.status = '完整备份已导出，文件不包含 API Key。'
+  } catch (error) {
+    backupRestoreState.status = error instanceof Error ? error.message : '完整备份导出失败。'
+  } finally {
+    renderBackupRestoreSection()
+  }
+}
+
+async function handleFullBackupImport(event) {
+  const input = event?.target
+  const file = input?.files?.[0]
+  if (!file) {
+    return
+  }
+
+  backupRestoreState.status = '正在读取备份文件...'
+  backupRestoreState.backup = null
+  backupRestoreState.preview = null
+  renderBackupRestoreSection()
+
+  try {
+    const rawText = await readTextFile(file)
+    const backup = parseCuratorBackupFile(JSON.parse(rawText))
+    const preview = await buildBackupRestorePreview(backup, file.name)
+    backupRestoreState.fileName = file.name
+    backupRestoreState.backup = backup
+    backupRestoreState.preview = preview
+    backupRestoreState.status = '已生成恢复预览，请选择恢复范围。'
+  } catch (error) {
+    backupRestoreState.status = error instanceof Error ? error.message : '备份文件导入失败。'
+  } finally {
+    if (input) {
+      input.value = ''
+    }
+    renderBackupRestoreSection()
+  }
+}
+
+async function handleFullBackupRestore(mode: BackupRestoreMode) {
+  if (!backupRestoreState.backup || backupRestoreState.restoring) {
+    return
+  }
+
+  const modeLabel = mode === 'tagsOnly'
+    ? '只恢复标签数据'
+    : mode === 'newTabOnly'
+      ? '只恢复新标签页配置'
+      : '恢复全部可安全恢复的数据'
+  const confirmed = await requestConfirmation({
+    title: `${modeLabel}？`,
+    copy: mode === 'safeFull'
+      ? '恢复前会自动创建本地备份；缺失书签只会复制到新的恢复文件夹，不会替换整个 Chrome 书签树，也不会恢复 API Key。'
+      : '恢复会写入对应的本地扩展数据，不会恢复 API Key。',
+    confirmLabel: modeLabel,
+    cancelLabel: '取消',
+    tone: mode === 'safeFull' ? 'warning' : 'danger',
+    label: 'Restore'
+  })
+  if (!confirmed) {
+    return
+  }
+
+  backupRestoreState.restoring = true
+  backupRestoreState.status = '正在恢复...'
+  renderBackupRestoreSection()
+
+  try {
+    await createAutoBackupBeforeDangerousOperation({
+      kind: 'restore',
+      source: 'options',
+      reason: `恢复备份：${modeLabel}`
+    })
+    const result = await restoreCuratorBackup(backupRestoreState.backup, mode)
+    await hydrateAvailabilityCatalog({ preserveResults: true })
+    aiNamingState.tagIndex = await loadBookmarkTagIndex()
+    backupRestoreState.status =
+      `恢复完成：标签 ${result.restored.tags} 条，新标签页配置 ${result.restored.newTabSections} 项，本地数据 ${result.restored.storageSections} 项，复制缺失书签 ${result.restored.copiedBookmarks} 条；无法匹配标签 ${result.unmatchedTags} 条。`
+  } catch (error) {
+    backupRestoreState.status = error instanceof Error ? error.message : '备份恢复失败。'
+  } finally {
+    backupRestoreState.restoring = false
+    renderBackupRestoreSection()
   }
 }
 
@@ -4171,6 +4590,14 @@ async function moveAiNamingResultsToSuggestedFolders(bookmarkIds) {
   const folderCache = new Map()
 
   try {
+    await createAutoBackupBeforeDangerousOperation({
+      kind: 'batch-move',
+      source: 'options',
+      reason: `AI 推荐文件夹批量移动 ${targetResults.length} 条`,
+      targetBookmarkIds: targetResults.map((result) => String(result.id)),
+      estimatedChangeCount: targetResults.length
+    })
+
     for (const result of targetResults) {
       try {
         const targetFolderId = await ensureAiSuggestedFolderPath(result.suggestedFolder, folderCache)
@@ -4249,6 +4676,14 @@ async function applyAiNamingResultsByIds(bookmarkIds) {
   let applyError = null
 
   try {
+    await createAutoBackupBeforeDangerousOperation({
+      kind: 'batch-tag-update',
+      source: 'options',
+      reason: `AI 命名建议批量应用 ${targetResults.length} 条`,
+      targetBookmarkIds: targetResults.map((result) => String(result.id)),
+      estimatedChangeCount: targetResults.length
+    })
+
     for (const result of targetResults) {
       await updateBookmark(result.id, {
         title: result.suggestedTitle
@@ -6345,6 +6780,15 @@ async function moveSelectedAvailabilityToFolder(folderId) {
   let moveError = null
 
   try {
+    await createAutoBackupBeforeDangerousOperation({
+      kind: 'batch-move',
+      source: 'options',
+      reason: `可用性结果批量移动 ${selectedResults.length} 条`,
+      targetBookmarkIds: selectedResults.map((result) => String(result.id)),
+      targetFolderIds: [folderId],
+      estimatedChangeCount: selectedResults.length
+    })
+
     for (const result of selectedResults) {
       await moveBookmark(result.id, folderId)
       movedIds.push(result.id)

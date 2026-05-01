@@ -21,7 +21,15 @@ export const STORAGE_KEYS = {
   redirectCache: 'curatorBookmarkRedirectCache',
   recycleBin: 'curatorBookmarkRecycleBin',
   aiProviderSettings: 'curatorBookmarkAiNamingSettings',
-  bookmarkTagIndex: 'curatorBookmarkTagIndex'
+  bookmarkTagIndex: 'curatorBookmarkTagIndex',
+  backupSettings: 'curatorBookmarkBackupSettings',
+  autoBackupIndex: 'curatorBookmarkAutoBackupIndex',
+  folderCleanupState: 'curatorBookmarkFolderCleanupState',
+  inboxState: 'curatorBookmarkInboxState',
+  inboxSettings: 'curatorBookmarkInboxSettings',
+  contentSnapshotSettings: 'curatorBookmarkContentSnapshotSettings',
+  contentSnapshotIndex: 'curatorBookmarkContentSnapshotIndex',
+  savedSearches: 'curatorBookmarkSavedSearches'
 } as const
 
 type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS]
@@ -33,3 +41,7 @@ export const AUTO_ANALYZE_STATUS_ACTIVE_EXPIRE_MS = 10 * 60 * 1000
 export const AUTO_ANALYZE_STATUS_FINAL_EXPIRE_MS = 5 * 60 * 1000
 export const POPUP_COMMAND_INTENT_TTL_MS = 45 * 1000
 export const COMMAND_FEEDBACK_BADGE_TTL_MS = 3000
+export const AUTO_BACKUP_RETENTION_LIMIT = 5
+export const CONTENT_SNAPSHOT_LOCAL_TEXT_LIMIT = 20 * 1024
+export const SAVED_SEARCH_LIMIT = 30
+export const INBOX_AUTO_MOVE_MIN_CONFIDENCE = 0.72

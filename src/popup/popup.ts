@@ -53,6 +53,11 @@ import {
   normalizePageContentContext
 } from '../options/sections/content-extraction.js'
 import {
+  buildContentSnapshotSearchMapWithFullText,
+  loadContentSnapshotIndex,
+  loadContentSnapshotSettings
+} from '../shared/content-snapshots.js'
+import {
   AI_NAMING_DEFAULT_TIMEOUT_MS,
   AI_NAMING_JINA_READER_ORIGIN
 } from '../options/shared-options/constants.js'
@@ -66,6 +71,10 @@ import {
   searchBookmarksCooperatively,
   type PopupSearchResult
 } from './search.js'
+import {
+  parseSearchQuery
+} from '../shared/search-query.js'
+import { DEFAULT_INBOX_FOLDER_TITLE } from '../shared/inbox.js'
 import {
   buildLocalNaturalSearchPlan,
   filterBookmarksByNaturalDateRange,
@@ -178,7 +187,7 @@ document.addEventListener('DOMContentLoaded', () => {
   void hydratePopupPreferences().finally(() => {
     bindEvents()
     render()
-    void showPendingAutoAnalyzeNotice()
+    void hydrateAutoAnalyzeStatus()
     refreshData({ initial: true, preserveSearch: false }).finally(() => {
       void consumePopupCommandIntent().then((handled) => {
         if (!handled && !document.body.classList.contains('smart-active')) {
@@ -207,8 +216,13 @@ function bindEvents() {
     showViewNotice('已清空搜索')
     dom.searchInput.focus()
   })
+  dom.searchHelpToggle.addEventListener('click', () => {
+    state.searchHelpOpen = !state.searchHelpOpen
+    renderSearchTools()
+  })
   dom.folderFilterTrigger.addEventListener('click', openFilterDialog)
   dom.clearFolderFilter.addEventListener('click', clearFolderFilter)
+  dom.openInboxFilter.addEventListener('click', applyInboxFolderFilter)
 
   dom.content.addEventListener('click', handleContentClick)
   dom.content.addEventListener('pointerover', handleContentPointerOver)
@@ -309,12 +323,9 @@ async function openBookmarkHistoryPage() {
   }
 }
 
-async function showPendingAutoAnalyzeNotice() {
+async function hydrateAutoAnalyzeStatus() {
   try {
-    const stored = await getLocalStorage([
-      STORAGE_KEYS.autoAnalyzeStatus,
-      STORAGE_KEYS.pendingAutoAnalyzeNotice
-    ])
+    const stored = await getLocalStorage([STORAGE_KEYS.autoAnalyzeStatus])
     const currentStatus = normalizeAutoAnalyzeStatus(stored[STORAGE_KEYS.autoAnalyzeStatus])
     state.autoAnalyzeStatus = currentStatus
     renderAutoAnalyzeStatus()
@@ -322,39 +333,9 @@ async function showPendingAutoAnalyzeNotice() {
       await removeLocalStorage(STORAGE_KEYS.autoAnalyzeStatus)
     }
     await acknowledgeAutoAnalyzeBadge(currentStatus)
-
-    const notice = stored[STORAGE_KEYS.pendingAutoAnalyzeNotice]
-    if (!notice || typeof notice !== 'object') {
-      return
-    }
-
-    const noticePayload = notice as Record<string, unknown>
-    const noticeCreatedAt = Number(noticePayload.createdAt) || 0
-    if (noticeCreatedAt && noticeCreatedAt + AUTO_ANALYZE_STATUS_FINAL_EXPIRE_MS <= Date.now()) {
-      await clearPendingAutoAnalyzeNotice()
-      return
-    }
-
-    const folderPath = cleanSmartText(noticePayload.folderPath || '', 48)
-    const bookmarkTitle = cleanSmartText(noticePayload.bookmarkTitle || '新增书签', 52)
-    if (!folderPath) {
-      await clearPendingAutoAnalyzeNotice()
-      return
-    }
-
-    showToast({
-      type: 'success',
-      message: `已添加到 ${folderPath}：${bookmarkTitle}`,
-      action: 'open-bookmark-history',
-      actionLabel: '查看'
-    })
-    await clearPendingAutoAnalyzeNotice()
+    await removeLocalStorage(STORAGE_KEYS.pendingAutoAnalyzeNotice)
   } catch (error) {
   }
-}
-
-async function clearPendingAutoAnalyzeNotice() {
-  await removeLocalStorage(STORAGE_KEYS.pendingAutoAnalyzeNotice)
 }
 
 async function dismissAutoAnalyzeStatus() {
@@ -424,11 +405,6 @@ function handleAutoAnalyzeStorageChanged(
         void clearActionBadge()
       })
     }
-  }
-
-  const pendingNoticeChange = changes[STORAGE_KEYS.pendingAutoAnalyzeNotice]
-  if (pendingNoticeChange?.newValue) {
-    void showPendingAutoAnalyzeNotice()
   }
 
   const popupIntentChange = changes[STORAGE_KEYS.popupCommandIntent]
@@ -693,9 +669,27 @@ async function refreshData({ initial = false, preserveSearch = true } = {}) {
 
     const extracted = extractBookmarkData(rootNode)
     const tagIndex = await loadBookmarkTagIndex().catch(() => null)
+    const snapshotSettings = await loadContentSnapshotSettings().catch(() => null)
+    const snapshotIndex = await loadContentSnapshotIndex().catch(() => null)
+    const snapshotSearchMap = snapshotIndex
+      ? await buildContentSnapshotSearchMapWithFullText(snapshotIndex, {
+          includeFullText: Boolean(snapshotSettings?.fullTextSearchEnabled),
+          maxRecords: 600
+        }).catch(() => new Map<string, string>())
+      : new Map<string, string>()
     const tagRecords = tagIndex?.records || {}
     const indexedBookmarks = extracted.bookmarks.map((bookmark) => {
-      return indexBookmarkForSearch(bookmark, tagRecords[bookmark.id] || null)
+      const indexed = indexBookmarkForSearch(
+        bookmark,
+        tagRecords[bookmark.id] || null,
+        snapshotIndex?.records?.[bookmark.id] || null,
+        { includeFullText: Boolean(snapshotSettings?.fullTextSearchEnabled) }
+      )
+      const snapshotSearchText = snapshotSearchMap.get(bookmark.id)
+      if (snapshotSearchText) {
+        indexed.searchText = `${indexed.searchText} ${snapshotSearchText}`.trim()
+      }
+      return indexed
     })
     state.allBookmarks = indexedBookmarks
     state.allFolders = extracted.folders
@@ -1121,6 +1115,18 @@ function renderBanner() {
     getNaturalSearchToggleAriaLabel(naturalSearchFallback, naturalSearchPending)
   )
   dom.naturalSearchToggle.title = getNaturalSearchToggleTitle(naturalSearchFallback, naturalSearchPending)
+  renderSearchTools()
+}
+
+function renderSearchTools() {
+  const parsed = parseSearchQuery(state.searchQuery)
+  const chips = parsed.chips
+  dom.searchHelpPanel.classList.toggle('hidden', !state.searchHelpOpen)
+  dom.searchHelpToggle.setAttribute('aria-expanded', String(state.searchHelpOpen))
+  dom.searchChips.classList.toggle('hidden', chips.length === 0)
+  dom.searchChips.innerHTML = chips
+    .map((chip) => `<span class="search-filter-chip ${escapeAttr(chip.kind)}">${escapeHtml(chip.label)}</span>`)
+    .join('')
 }
 
 function getSearchModeView(isFallback: boolean, isPending: boolean) {
@@ -1128,8 +1134,8 @@ function getSearchModeView(isFallback: boolean, isPending: boolean) {
     return {
       chip: '本地',
       className: '',
-      placeholder: '本地搜索标题、网址或标签',
-      ariaLabel: '本地搜索书签标题、网址或标签'
+      placeholder: '',
+      ariaLabel: '本地搜索书签标题、网址、标签或高级语法'
     }
   }
 
@@ -1137,7 +1143,7 @@ function getSearchModeView(isFallback: boolean, isPending: boolean) {
     return {
       chip: '理解中',
       className: 'ai',
-      placeholder: 'AI 正在改写查询',
+      placeholder: '',
       ariaLabel: '自然语言搜索正在使用 AI 改写查询'
     }
   }
@@ -1146,7 +1152,7 @@ function getSearchModeView(isFallback: boolean, isPending: boolean) {
     return {
       chip: '本地NL',
       className: 'local-natural',
-      placeholder: '本地自然语言筛选书签',
+      placeholder: '',
       ariaLabel: '本地自然语言筛选书签'
     }
   }
@@ -1154,7 +1160,7 @@ function getSearchModeView(isFallback: boolean, isPending: boolean) {
   return {
     chip: 'AI改写',
     className: 'ai',
-    placeholder: '用自然语言描述要找的书签',
+    placeholder: '',
     ariaLabel: '使用 AI 改写的自然语言搜索'
   }
 }
@@ -1560,7 +1566,6 @@ function renderSmartResultCard() {
           value="${escapeAttr(state.smartSuggestedTitle || getCurrentPageTitle())}"
           aria-label="推荐书签标题"
         >
-        <span class="smart-edit-indicator" aria-hidden="true"></span>
       </div>
 
       <p class="smart-section-label">推荐文件夹</p>
@@ -2809,6 +2814,20 @@ function clearFolderFilter() {
   }
 
   applyFolderFilter(null)
+}
+
+function applyInboxFolderFilter() {
+  const inboxFolder = [...state.folderMap.values()].find((folder) => {
+    return normalizeText(folder.title || '') === normalizeText(DEFAULT_INBOX_FOLDER_TITLE) ||
+      normalizeText(folder.path || '').endsWith(normalizeText(DEFAULT_INBOX_FOLDER_TITLE))
+  })
+
+  if (!inboxFolder) {
+    showToast({ type: 'info', message: 'Inbox / 待整理 尚未创建，使用快捷键收藏后会自动生成。' })
+    return
+  }
+
+  applyFolderFilter(inboxFolder.id)
 }
 
 function openSmartFolderDialog() {

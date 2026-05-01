@@ -17,11 +17,24 @@ const DUPLICATE_STRATEGY_LABELS = {
   folder: '保留指定文件夹'
 }
 
-export function buildDuplicateGroups(bookmarks) {
+export interface BuildDuplicateGroupsOptions {
+  excludedFolderIds?: Iterable<string>
+}
+
+export function buildDuplicateGroups(bookmarks, options: BuildDuplicateGroupsOptions = {}) {
   const groupMap = new Map()
+  const excludedFolderIds = new Set(
+    [...(options.excludedFolderIds || [])]
+      .map((folderId) => String(folderId || '').trim())
+      .filter(Boolean)
+  )
 
   for (const bookmark of bookmarks) {
     if (!bookmark?.url) {
+      continue
+    }
+
+    if (isBookmarkInExcludedFolder(bookmark, excludedFolderIds)) {
       continue
     }
 
@@ -47,6 +60,20 @@ export function buildDuplicateGroups(bookmarks) {
         left.displayUrl.localeCompare(right.displayUrl, 'zh-CN')
       )
     })
+}
+
+function isBookmarkInExcludedFolder(bookmark, excludedFolderIds: Set<string>): boolean {
+  if (!excludedFolderIds.size) {
+    return false
+  }
+
+  const parentId = String(bookmark.parentId || '').trim()
+  if (parentId && excludedFolderIds.has(parentId)) {
+    return true
+  }
+
+  const ancestorIds = Array.isArray(bookmark.ancestorIds) ? bookmark.ancestorIds : []
+  return ancestorIds.some((folderId) => excludedFolderIds.has(String(folderId || '').trim()))
 }
 
 function buildDuplicateGroupModel(key, items) {

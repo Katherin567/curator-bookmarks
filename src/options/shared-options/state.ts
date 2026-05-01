@@ -4,6 +4,14 @@ import {
   AI_NAMING_DEFAULT_TIMEOUT_MS,
   AI_NAMING_DEFAULT_BATCH_SIZE
 } from './constants.js'
+import type { SavedSearch, SavedSearchIndex } from '../../shared/search-query.js'
+import { getDefaultInboxSettings } from '../../shared/inbox.js'
+import {
+  DEFAULT_CONTENT_SNAPSHOT_SETTINGS,
+  type ContentSnapshotIndex,
+  type ContentSnapshotSettings
+} from '../../shared/content-snapshots.js'
+import type { FolderCleanupSplitUndo } from '../../shared/folder-cleanup.js'
 
 export function createEmptyIgnoreRules() {
   return {
@@ -152,7 +160,9 @@ export const managerState = {
   aiRevealApiKey: false,
   shortcutCommands: [] as chrome.commands.Command[],
   shortcutStatus: 'loading',
-  shortcutStatusTone: 'muted'
+  shortcutStatusTone: 'muted',
+  inboxSettings: getDefaultInboxSettings(),
+  inboxSettingsStatus: ''
 }
 
 export const dashboardState = {
@@ -162,6 +172,10 @@ export const dashboardState = {
   domain: '',
   month: '',
   sortKey: 'date-desc' as DashboardSortKey,
+  searchHelpOpen: false,
+  savedSearchIndex: { version: 1, updatedAt: 0, searches: [] } as SavedSearchIndex,
+  savedSearches: [] as SavedSearch[],
+  selectedSavedSearchId: '',
   selectedIds: new Set<string>(),
   expandedTagIds: new Set<string>(),
   tagEditorBookmarkId: '',
@@ -171,6 +185,25 @@ export const dashboardState = {
   tagEditorBusyAction: '',
   copyFeedbackId: '',
   statusMessage: ''
+}
+
+export const contentSnapshotState = {
+  settings: { ...DEFAULT_CONTENT_SNAPSHOT_SETTINGS } as ContentSnapshotSettings,
+  index: { version: 1, updatedAt: 0, records: {} } as ContentSnapshotIndex,
+  searchTextMap: new Map<string, string>(),
+  statusMessage: ''
+}
+
+export const folderCleanupState = {
+  rootNode: null as chrome.bookmarks.BookmarkTreeNode | null,
+  suggestions: [] as any[],
+  selectedSuggestionId: '',
+  statusMessage: '',
+  lastAnalyzedAt: 0,
+  running: false,
+  executing: false,
+  executedSuggestionIds: new Set<string>(),
+  lastSplitUndo: null as FolderCleanupSplitUndo | null
 }
 
 export const aiNamingState = {
@@ -223,4 +256,12 @@ export const aiNamingState = {
 
 export const aiNamingManagerState = {
   settings: createDefaultAiNamingSettings()
+}
+
+export const backupRestoreState = {
+  fileName: '',
+  backup: null,
+  preview: null,
+  restoring: false,
+  status: ''
 }

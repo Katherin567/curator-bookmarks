@@ -2,6 +2,14 @@ import { pinyin } from 'pinyin-pro'
 import type { BookmarkRecord } from '../shared/types.js'
 import { normalizeText, stripCommonUrlPrefix } from '../shared/text.js'
 import { getEffectiveBookmarkTags, type BookmarkTagRecord } from '../shared/bookmark-tags.js'
+import {
+  buildSearchTextQuery,
+  matchesParsedSearchQuery,
+  parseSearchQuery,
+  type ParsedSearchQuery
+} from '../shared/search-query.js'
+import type { ContentSnapshotRecord } from '../shared/content-snapshots.js'
+import { buildContentSnapshotSearchText } from '../shared/content-snapshots.js'
 
 export const MAX_POPUP_SEARCH_RESULTS = 20
 export const POPUP_SEARCH_ASYNC_THRESHOLD = 1200
@@ -31,18 +39,19 @@ export interface CooperativeSearchOptions {
   yieldWork?: () => Promise<unknown>
 }
 
-interface ParsedPopupSearchQuery {
-  rawQuery: string
+interface ParsedPopupSearchQuery extends ParsedSearchQuery {
   normalizedQuery: string
   queryTerms: string[]
-  siteFilters: string[]
-  folderFilters: string[]
-  typeFilters: string[]
   recencyHint: boolean
   hasStructuredFilters: boolean
 }
 
-export function indexBookmarkForSearch(bookmark: BookmarkRecord, tagRecord: BookmarkTagRecord | null = null): PopupSearchBookmark {
+export function indexBookmarkForSearch(
+  bookmark: BookmarkRecord,
+  tagRecord: BookmarkTagRecord | null = null,
+  snapshotRecord: ContentSnapshotRecord | null = null,
+  options: { includeFullText?: boolean } = {}
+): PopupSearchBookmark {
   const normalizedPath = normalizeText(bookmark.path || '')
   const normalizedDomain = normalizeText(bookmark.domain || '')
   const tagSummary = normalizeText(tagRecord?.summary || '')
@@ -50,6 +59,7 @@ export function indexBookmarkForSearch(bookmark: BookmarkRecord, tagRecord: Book
   const tagTopics = normalizeSearchList(tagRecord?.topics)
   const tagTags = normalizeSearchList(getEffectiveBookmarkTags(tagRecord))
   const tagAliases = normalizeSearchList(tagRecord?.aliases)
+  const snapshotSearchText = buildContentSnapshotSearchText(snapshotRecord, options)
   const pinyinTokens = buildPinyinSearchTokens([
     bookmark.title,
     bookmark.path,
@@ -79,7 +89,8 @@ export function indexBookmarkForSearch(bookmark: BookmarkRecord, tagRecord: Book
       ...tagAliases,
       ...pinyinTokens.full,
       ...pinyinTokens.initials,
-      tagSummary
+      tagSummary,
+      snapshotSearchText
     ]
       .filter(Boolean)
       .join(' ')
@@ -153,81 +164,24 @@ export function normalizeQuery(value: unknown): string {
 }
 
 function parsePopupSearchQuery(query: string): ParsedPopupSearchQuery {
-  const rawQuery = normalizeQuery(query)
-  const terms = getQueryTerms(rawQuery)
-  const textTerms: string[] = []
-  const siteFilters: string[] = []
-  const folderFilters: string[] = []
-  const typeFilters: string[] = []
-  let recencyHint = false
-
-  for (const term of terms) {
-    const operator = parseSearchOperatorTerm(term)
-    if (operator) {
-      if (operator.kind === 'site') {
-        siteFilters.push(operator.value)
-      } else if (operator.kind === 'folder') {
-        folderFilters.push(operator.value)
-      } else {
-        typeFilters.push(operator.value)
-      }
-      continue
-    }
-
-    if (isRecencyHintTerm(term)) {
-      recencyHint = true
-      continue
-    }
-
-    textTerms.push(term)
-  }
-
-  const normalizedQuery = textTerms.join(' ')
+  const parsed = parseSearchQuery(query)
+  const recencyHint = parsed.textTerms.some(isRecencyHintTerm)
+  const textTerms = parsed.textTerms.filter((term) => !isRecencyHintTerm(term))
+  const normalizedQuery = buildSearchTextQuery({ ...parsed, textTerms })
   return {
-    rawQuery,
+    ...parsed,
+    textTerms,
     normalizedQuery,
     queryTerms: getQueryTerms(normalizedQuery),
-    siteFilters: uniqueFilterTerms(siteFilters),
-    folderFilters: uniqueFilterTerms(folderFilters),
-    typeFilters: uniqueFilterTerms(typeFilters),
     recencyHint,
-    hasStructuredFilters: Boolean(siteFilters.length || folderFilters.length || typeFilters.length)
+    hasStructuredFilters: Boolean(
+      parsed.siteFilters.length ||
+      parsed.folderFilters.length ||
+      parsed.typeFilters.length ||
+      parsed.excludedTerms.length ||
+      parsed.dateRange
+    )
   }
-}
-
-function parseSearchOperatorTerm(term: string): { kind: 'site' | 'folder' | 'type'; value: string } | null {
-  const match = String(term || '').match(/^([^:：]+)[:：](.+)$/)
-  if (!match) {
-    return null
-  }
-
-  const key = normalizeText(match[1])
-  const value = normalizeFilterValue(match[2])
-  if (!value) {
-    return null
-  }
-
-  if (key === 'site' || key === 'domain' || key === 'url' || key === '站点' || key === '域名') {
-    return { kind: 'site', value }
-  }
-  if (key === 'folder' || key === 'path' || key === '文件夹' || key === '目录' || key === '路径') {
-    return { kind: 'folder', value }
-  }
-  if (key === 'type' || key === 'kind' || key === '类型' || key === '类别') {
-    return { kind: 'type', value }
-  }
-
-  return null
-}
-
-function normalizeFilterValue(value: unknown): string {
-  return normalizeText(stripCommonUrlPrefix(value))
-    .replace(/^["'“”‘’]+|["'“”‘’]+$/g, '')
-    .trim()
-}
-
-function uniqueFilterTerms(values: string[]): string[] {
-  return [...new Set(values.map((value) => normalizeFilterValue(value)).filter(Boolean))]
 }
 
 function isRecencyHintTerm(term: string): boolean {
@@ -247,6 +201,10 @@ export function scoreBookmark(
     siteFilters: [],
     folderFilters: [],
     typeFilters: [],
+    textTerms: queryTerms,
+    excludedTerms: [],
+    dateRange: null,
+    chips: [],
     recencyHint: false,
     hasStructuredFilters: false
   }).score
@@ -514,6 +472,17 @@ function matchesStructuredFilters(
   parsedQuery: ParsedPopupSearchQuery,
   reasons: string[]
 ): boolean {
+  if (!matchesParsedSearchQuery(parsedQuery, {
+    searchText: bookmark.searchText || `${bookmark.normalizedTitle} ${bookmark.normalizedUrl}`,
+    domain: bookmark.domain,
+    url: bookmark.normalizedUrl,
+    path: bookmark.path,
+    type: bookmark.tagContentType,
+    dateAdded: bookmark.dateAdded
+  })) {
+    return false
+  }
+
   if (parsedQuery.siteFilters.length) {
     const domain = normalizeText(bookmark.domain || '')
     const url = bookmark.normalizedUrl || ''
@@ -544,6 +513,14 @@ function matchesStructuredFilters(
       return false
     }
     addReason(reasons, `筛选：类型 ${matchedType}`)
+  }
+
+  if (parsedQuery.excludedTerms.length) {
+    addReason(reasons, `排除：${parsedQuery.excludedTerms.join('、')}`)
+  }
+
+  if (parsedQuery.dateRange) {
+    addReason(reasons, `筛选：${parsedQuery.dateRange.label}`)
   }
 
   return true

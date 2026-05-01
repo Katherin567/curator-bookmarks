@@ -1,6 +1,8 @@
 import type {
   BookmarkSaveMessage,
   BookmarkSaveResult,
+  InboxUndoLastMoveMessage,
+  InboxUndoLastMoveResult,
   NavigationCancelMessage,
   NavigationCheckMessage,
   NavigationCheckResult
@@ -12,6 +14,7 @@ import {
   AUTO_ANALYZE_STATUS_FINAL_EXPIRE_MS,
   BOOKMARK_ADD_HISTORY_LIMIT,
   COMMAND_FEEDBACK_BADGE_TTL_MS,
+  INBOX_AUTO_MOVE_MIN_CONFIDENCE,
   POPUP_COMMAND_INTENT_TTL_MS,
   STORAGE_KEYS
 } from '../shared/constants.js'
@@ -39,6 +42,17 @@ import {
   AI_NAMING_JINA_READER_ORIGIN
 } from '../options/shared-options/constants.js'
 import {
+  DEFAULT_INBOX_FOLDER_TITLE,
+  clearInboxUndoMove,
+  ensureInboxFolder,
+  findInboxItemByBookmarkId,
+  loadInboxSettings,
+  loadInboxState,
+  recordInboxUndoMove,
+  updateInboxItem,
+  upsertInboxItem
+} from '../shared/inbox.js'
+import {
   buildFallbackPageContentFromUrl,
   buildJinaReaderUrl,
   buildPageContextForAi,
@@ -47,6 +61,10 @@ import {
   normalizePageContentContext,
   type PageContentContext
 } from '../options/sections/content-extraction.js'
+import {
+  loadContentSnapshotSettings,
+  saveContentSnapshotFromContext
+} from '../shared/content-snapshots.js'
 
 interface PendingCheckState {
   tabId: number
@@ -179,6 +197,9 @@ const AUTO_ANALYZE_QUEUE_RETRY_MS = 45000
 const COMMAND_OPEN_SEARCH = 'curator-open-search'
 const COMMAND_OPEN_SMART_CLASSIFIER = 'curator-open-smart-classifier'
 const COMMAND_TOGGLE_AUTO_ANALYZE = 'curator-toggle-auto-analyze'
+const COMMAND_CAPTURE_INBOX = 'curator-capture-inbox'
+const INBOX_CAPTURE_NOTIFICATION_PREFIX = 'curator-inbox-capture-'
+const INBOX_CLASSIFIED_NOTIFICATION_PREFIX = 'curator-inbox-classified-'
 
 const AUTO_CLASSIFY_SCHEMA = {
   type: 'object',
@@ -231,7 +252,11 @@ const AUTO_CLASSIFY_SCHEMA = {
   }
 } as const
 
-type RuntimeMessage = BookmarkSaveMessage | NavigationCheckMessage | NavigationCancelMessage
+type RuntimeMessage =
+  | BookmarkSaveMessage
+  | InboxUndoLastMoveMessage
+  | NavigationCheckMessage
+  | NavigationCancelMessage
 
 chrome.alarms?.onAlarm.addListener((alarm) => {
   if (alarm.name === AUTO_ANALYZE_QUEUE_ALARM) {
@@ -259,6 +284,21 @@ chrome.commands?.onCommand.addListener((command) => {
   })
 })
 
+chrome.notifications?.onButtonClicked.addListener((notificationId, buttonIndex) => {
+  if (buttonIndex !== 0 || !notificationId.startsWith(INBOX_CLASSIFIED_NOTIFICATION_PREFIX)) {
+    return
+  }
+
+  undoLastInboxAutoMove().catch((error) => {
+    console.warn('[Curator] Inbox 自动移动撤销失败', error)
+    showInboxNotification({
+      notificationId: `${INBOX_CAPTURE_NOTIFICATION_PREFIX}undo-failed-${Date.now()}`,
+      title: 'Inbox 撤销失败',
+      message: error instanceof Error ? error.message : '未能撤销最近一次自动移动。'
+    }).catch(() => {})
+  })
+})
+
 restoreAutoAnalyzeStatusBadge().catch((error) => {
   console.warn('[Curator] 自动分析状态徽标恢复失败', error)
 })
@@ -274,6 +314,21 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, _sender, sendResp
         sendResponse({
           ok: false,
           error: error instanceof Error ? error.message : '后台保存书签失败。'
+        })
+      })
+
+    return true
+  }
+
+  if (message?.type === 'inbox:undo-last-move') {
+    undoLastInboxAutoMove()
+      .then((result) => {
+        sendResponse({ ok: true, result })
+      })
+      .catch((error) => {
+        sendResponse({
+          ok: false,
+          error: error instanceof Error ? error.message : 'Inbox 自动移动撤销失败。'
         })
       })
 
@@ -333,6 +388,11 @@ async function handleCommand(command: string): Promise<void> {
 
   if (command === COMMAND_TOGGLE_AUTO_ANALYZE) {
     await toggleAutoAnalyzeFromCommand(command)
+    return
+  }
+
+  if (command === COMMAND_CAPTURE_INBOX) {
+    await captureCurrentTabToInbox(command)
   }
 }
 
@@ -352,6 +412,114 @@ async function persistPopupCommandIntent(
 
   await setLocalStorage({
     [STORAGE_KEYS.popupCommandIntent]: intent
+  })
+}
+
+async function captureCurrentTabToInbox(sourceCommand: string): Promise<void> {
+  const settings = await loadInboxSettings()
+  if (!settings.enabled) {
+    await persistPopupCommandIntent({
+      action: 'feedback',
+      sourceCommand,
+      message: 'Inbox 捕获未开启，请先在通用设置中启用。',
+      tone: 'warning'
+    })
+    await showTransientCommandBadge('!', '#5f3432')
+    return
+  }
+
+  const tab = await getActiveTab()
+  const url = String(tab?.url || '').trim()
+  if (!/^https?:\/\//i.test(url)) {
+    await persistPopupCommandIntent({
+      action: 'feedback',
+      sourceCommand,
+      message: '当前页面不是可收藏的普通网页。',
+      tone: 'warning'
+    })
+    await showTransientCommandBadge('!', '#5f3432')
+    return
+  }
+
+  const inboxFolderId = await ensureInboxFolder(settings)
+  const title = cleanText(tab?.title || '') || '未命名网页'
+  const createdNode = await createBookmarkNode({
+    parentId: inboxFolderId,
+    title,
+    url
+  })
+  const now = Date.now()
+  const bookmarkId = String(createdNode.id)
+
+  await upsertInboxItem({
+    captureId: `inbox-${now}-${bookmarkId}`,
+    bookmarkId,
+    url,
+    title: String(createdNode.title || title),
+    inboxFolderId,
+    originalParentId: inboxFolderId,
+    status: 'captured',
+    createdAt: now,
+    updatedAt: now
+  })
+
+  const autoSettings = await loadAutoAnalyzeSettings()
+  if (hasUsableAiSettings(autoSettings)) {
+    await enqueueAutoAnalyzeBookmark({
+      bookmarkId,
+      url,
+      title
+    })
+    await updateInboxItem(bookmarkId, { status: 'analyzing' }).catch(() => {})
+    await persistAutoAnalyzeStatus({
+      status: 'queued',
+      bookmarkId,
+      url,
+      title,
+      createdAt: now,
+      detail: '已保存到 Inbox / 待整理，正在后台分析。'
+    }).catch((error) => {
+      console.warn('[Curator] Inbox 自动分析排队状态写入失败', error)
+    })
+    scheduleAutoAnalyzeQueueProcessing(AUTO_CLASSIFY_DELAY_MS)
+    scheduleAutoAnalyzeQueueAlarm(AUTO_CLASSIFY_DELAY_MS)
+    await showTransientCommandBadge('IN', '#2f5f80')
+    await showInboxNotification({
+      notificationId: `${INBOX_CAPTURE_NOTIFICATION_PREFIX}${bookmarkId}`,
+      title: '已保存到 Inbox / 待整理',
+      message: '正在后台分析并生成标签。'
+    })
+    return
+  }
+
+  await updateInboxItem(bookmarkId, {
+    status: 'needs-review',
+    lastError: '未配置 AI 渠道，已保留在 Inbox。'
+  }).catch(() => {})
+  await persistPopupCommandIntent({
+    action: 'feedback',
+    sourceCommand,
+    message: '已保存到 Inbox / 待整理。配置 AI 后可自动分析。',
+    tone: 'success'
+  })
+  await showTransientCommandBadge('IN', '#365f45')
+  await showInboxNotification({
+    notificationId: `${INBOX_CAPTURE_NOTIFICATION_PREFIX}${bookmarkId}`,
+    title: '已保存到 Inbox / 待整理',
+    message: '未配置 AI 渠道，书签会留在 Inbox 等待整理。'
+  })
+}
+
+function getActiveTab(): Promise<chrome.tabs.Tab | null> {
+  return new Promise((resolve) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const error = chrome.runtime.lastError
+      if (error) {
+        resolve(null)
+        return
+      }
+      resolve(tabs?.[0] || null)
+    })
   })
 }
 
@@ -565,7 +733,10 @@ async function handleBookmarkCreatedForAutoAnalysis(
   }
 
   const settings = await loadAutoAnalyzeSettings()
-  if (!settings.autoAnalyzeBookmarks || !hasUsableAiSettings(settings)) {
+  const snapshotSettings = await loadContentSnapshotSettings().catch(() => null)
+  const shouldAutoAnalyze = settings.autoAnalyzeBookmarks && hasUsableAiSettings(settings)
+  const shouldSnapshot = Boolean(snapshotSettings?.enabled && snapshotSettings.autoCaptureOnBookmarkCreate)
+  if (!shouldAutoAnalyze && !shouldSnapshot) {
     return
   }
 
@@ -580,7 +751,9 @@ async function handleBookmarkCreatedForAutoAnalysis(
     url: initialUrl,
     title: String(node.title || '').trim() || '新增书签',
     createdAt: Date.now(),
-    detail: '已加入自动分析，正在整理标签和命名。'
+    detail: shouldAutoAnalyze
+      ? '已加入自动分析，正在整理标签和命名。'
+      : '已加入网页快照队列，仅在本地保存索引。'
   }).catch((error) => {
     console.warn('[Curator] 自动分析排队状态写入失败', error)
   })
@@ -632,6 +805,12 @@ async function processAutoAnalyzeQueue(): Promise<void> {
           error: message
         })
         await markAutoAnalyzeQueueEntryFailed(entry.bookmarkId, message)
+        await updateInboxItem(entry.bookmarkId, {
+          status: 'failed',
+          lastError: message
+        }).catch((inboxError) => {
+          console.warn('[Curator] Inbox 失败状态写入失败', inboxError)
+        })
         await persistAutoAnalyzeStatus({
           status: 'failed',
           bookmarkId: entry.bookmarkId,
@@ -658,15 +837,24 @@ async function processAutoAnalyzeQueue(): Promise<void> {
 
 async function runAutoAnalysisForBookmark(entry: AutoAnalyzeQueueEntry): Promise<void> {
   const bookmarkId = entry.bookmarkId
+  const inboxItem = await findInboxItemByBookmarkId(bookmarkId)
   const settings = await loadAutoAnalyzeSettings()
-  if (!settings.autoAnalyzeBookmarks || !hasUsableAiSettings(settings)) {
+  const snapshotSettings = await loadContentSnapshotSettings().catch(() => null)
+  const shouldSnapshot = Boolean(snapshotSettings?.enabled && snapshotSettings.autoCaptureOnBookmarkCreate)
+  const shouldUploadToAi = (settings.autoAnalyzeBookmarks || Boolean(inboxItem)) &&
+    hasUsableAiSettings(settings) &&
+    !snapshotSettings?.localOnlyNoAiUpload
+
+  if (!shouldSnapshot && !shouldUploadToAi) {
     await clearAutoAnalyzeStatusForBookmark(bookmarkId)
     return
   }
 
-  const providerOrigin = getOriginPermissionPattern(settings.baseUrl)
-  if (!providerOrigin || !(await containsHostPermission(providerOrigin))) {
-    throw new Error('缺少 AI 服务地址访问权限，请在设置页重新测试连接或保存自动分析设置。')
+  if (shouldUploadToAi) {
+    const providerOrigin = getOriginPermissionPattern(settings.baseUrl)
+    if (!providerOrigin || !(await containsHostPermission(providerOrigin))) {
+      throw new Error('缺少 AI 服务地址访问权限，请在设置页重新测试连接或保存自动分析设置。')
+    }
   }
 
   const bookmark = await getBookmarkById(bookmarkId)
@@ -687,7 +875,35 @@ async function runAutoAnalysisForBookmark(entry: AutoAnalyzeQueueEntry): Promise
   const rootNode = Array.isArray(tree) ? tree[0] : tree
   const extracted = extractBookmarkData(rootNode)
   const bookmarkRecord = extracted.bookmarkMap.get(bookmarkId) || buildAutoBookmarkRecord(bookmark)
-  const pageContext = await buildAutoPageContext(bookmarkRecord, settings)
+  const pageContext = await buildAutoPageContext(bookmarkRecord, {
+    ...settings,
+    allowRemoteParsing: shouldUploadToAi && settings.allowRemoteParsing
+  })
+  if (shouldSnapshot && snapshotSettings) {
+    await saveContentSnapshotFromContext({
+      bookmark: bookmarkRecord,
+      context: pageContext,
+      settings: snapshotSettings
+    }).catch((error) => {
+      console.warn('[Curator] 网页快照保存失败', error)
+    })
+  }
+
+  if (!shouldUploadToAi) {
+    await persistAutoAnalyzeStatus({
+      status: 'completed',
+      bookmarkId,
+      url: bookmark.url,
+      title: bookmarkRecord.title || entry.title || '新增书签',
+      folderPath: bookmarkRecord.path || extracted.folderMap.get(String(bookmark.parentId || ''))?.path || '',
+      createdAt: entry.createdAt,
+      detail: snapshotSettings?.localOnlyNoAiUpload
+        ? '网页快照已仅保存到本地，未上传给 AI。'
+        : '网页快照已保存到本地。'
+    })
+    return
+  }
+
   const aiResult = await requestAutoClassification({
     settings,
     pageContext,
@@ -696,6 +912,31 @@ async function runAutoAnalysisForBookmark(entry: AutoAnalyzeQueueEntry): Promise
   })
   const recommendation = chooseAutoFolderRecommendation(aiResult, extracted.folders, bookmarkRecord)
   if (!recommendation) {
+    await persistAutoBookmarkTagAnalysis({
+      bookmarkId,
+      title: bookmarkRecord.title || entry.title || '新增书签',
+      url: bookmark.url,
+      path: bookmarkRecord.path || extracted.folderMap.get(String(bookmark.parentId || ''))?.path || '',
+      aiResult,
+      pageContext,
+      settings
+    })
+    if (inboxItem) {
+      await updateInboxItem(bookmarkId, {
+        status: 'needs-review',
+        confidence: aiResult.confidence,
+        lastError: 'AI 未找到合适的目标文件夹。'
+      }).catch((error) => {
+        console.warn('[Curator] Inbox 状态更新失败', error)
+      })
+      await maybeNotifyInboxClassified({
+        bookmarkId,
+        title: bookmarkRecord.title || entry.title || '新增书签',
+        folderPath: DEFAULT_INBOX_FOLDER_TITLE,
+        moved: false,
+        message: 'AI 已生成标签，未找到合适文件夹，已保留在 Inbox。'
+      })
+    }
     await persistAutoAnalyzeStatus({
       status: 'completed',
       bookmarkId,
@@ -709,10 +950,22 @@ async function runAutoAnalysisForBookmark(entry: AutoAnalyzeQueueEntry): Promise
     return
   }
 
-  const folderId = recommendation.kind === 'new'
-    ? await ensureBookmarkFolderPath(recommendation.path)
-    : recommendation.folderId
-  if (!folderId) {
+  const inboxSettings = inboxItem ? await loadInboxSettings() : null
+  const inboxMinConfidence = inboxSettings?.minAutoMoveConfidence ?? INBOX_AUTO_MOVE_MIN_CONFIDENCE
+  const shouldAutoMoveRecommendation = !inboxItem ||
+    (
+      Boolean(inboxSettings?.autoMoveToRecommendedFolder) &&
+      !inboxSettings?.tagOnlyNoAutoMove &&
+      recommendation.confidence >= inboxMinConfidence
+    )
+  const folderId = shouldAutoMoveRecommendation
+    ? recommendation.kind === 'new'
+      ? await ensureBookmarkFolderPath(recommendation.path)
+      : recommendation.folderId
+    : recommendation.kind === 'existing'
+      ? recommendation.folderId
+      : ''
+  if (shouldAutoMoveRecommendation && !folderId) {
     throw new Error('AI 已返回推荐文件夹，但无法解析目标文件夹。')
   }
 
@@ -730,7 +983,7 @@ async function runAutoAnalysisForBookmark(entry: AutoAnalyzeQueueEntry): Promise
   }
 
   const originalParentId = String(latestBookmark.parentId || bookmark.parentId || '')
-  const moved = originalParentId !== folderId
+  const moved = shouldAutoMoveRecommendation && originalParentId !== folderId
   let currentBookmark = latestBookmark
   if (moved) {
     currentBookmark = await moveBookmarkNode(bookmarkId, folderId)
@@ -747,28 +1000,62 @@ async function runAutoAnalysisForBookmark(entry: AutoAnalyzeQueueEntry): Promise
     }
   }
 
-  upsertBookmarkTagFromAnalysis({
-    bookmark: {
-      id: bookmarkId,
-      title: finalBookmarkTitle,
-      url: bookmark.url,
-      path: recommendation.path || recommendation.title
-    },
-    analysis: {
-      summary: aiResult.summary,
-      contentType: aiResult.contentType,
-      topics: aiResult.topics,
-      tags: aiResult.tags,
-      aliases: aiResult.aliases,
-      confidence: aiResult.confidence,
-      extraction: buildAutoExtractionSnapshot(pageContext)
-    },
-    source: 'auto_analyze',
-    model: settings.model,
-    extraction: buildAutoExtractionSnapshot(pageContext)
+  persistAutoBookmarkTagAnalysis({
+    bookmarkId,
+    title: finalBookmarkTitle,
+    url: bookmark.url,
+    path: recommendation.path || recommendation.title,
+    aiResult,
+    pageContext,
+    settings
   }).catch((error) => {
     console.warn('[Curator] 自动分析标签写入失败', error)
   })
+
+  if (inboxItem) {
+    await updateInboxItem(bookmarkId, {
+      status: moved
+        ? 'moved'
+        : shouldAutoMoveRecommendation
+          ? 'tagged'
+          : 'needs-review',
+      recommendedFolderId: folderId || recommendation.folderId,
+      recommendedFolderPath: recommendation.path || recommendation.title,
+      confidence: recommendation.confidence,
+      lastError: shouldAutoMoveRecommendation
+        ? ''
+        : inboxSettings?.tagOnlyNoAutoMove
+          ? '已按设置只生成标签，未自动移动。'
+          : 'AI 置信度较低，已保留在 Inbox。'
+    }).catch((error) => {
+      console.warn('[Curator] Inbox 状态更新失败', error)
+    })
+
+    if (moved) {
+      await recordInboxUndoMove({
+        bookmarkId,
+        fromFolderId: folderId,
+        toFolderId: originalParentId,
+        movedAt: Date.now()
+      }).catch((error) => {
+        console.warn('[Curator] Inbox 撤销状态写入失败', error)
+      })
+    }
+
+    await maybeNotifyInboxClassified({
+      bookmarkId,
+      title: finalBookmarkTitle,
+      folderPath: moved
+        ? recommendation.path || recommendation.title
+        : DEFAULT_INBOX_FOLDER_TITLE,
+      moved,
+      message: moved
+        ? `已归类到 ${recommendation.path || recommendation.title}`
+        : inboxSettings?.tagOnlyNoAutoMove
+          ? '已生成标签和摘要，按设置保留在 Inbox。'
+          : '置信度较低，已生成标签并保留在 Inbox。'
+    })
+  }
 
   appendBookmarkAddHistory({
     id: `bookmark-add-${Date.now()}-${bookmarkId}`,
@@ -787,14 +1074,6 @@ async function runAutoAnalysisForBookmark(entry: AutoAnalyzeQueueEntry): Promise
     suggestedTitle
   }).catch((error) => {
     console.warn('[Curator] 添加书签历史写入失败', error)
-  })
-
-  await persistPendingAutoAnalyzeNotice({
-    bookmarkTitle: finalBookmarkTitle,
-    folderPath: recommendation.path || recommendation.title,
-    confidence: recommendation.confidence
-  }).catch((error) => {
-    console.warn('[Curator] 自动分析待提示写入失败', error)
   })
 
   await persistAutoAnalyzeStatus({
@@ -887,6 +1166,137 @@ async function enqueueAutoAnalyzeBookmark({
       ...entries.filter((entry) => entry.bookmarkId !== bookmarkId)
     ].slice(0, AUTO_ANALYZE_QUEUE_LIMIT)
   })
+}
+
+async function persistAutoBookmarkTagAnalysis({
+  bookmarkId,
+  title,
+  url,
+  path,
+  aiResult,
+  pageContext,
+  settings
+}: {
+  bookmarkId: string
+  title: string
+  url: string
+  path: string
+  aiResult: AutoClassifyResult
+  pageContext: PageContentContext
+  settings: AiNamingSettings
+}): Promise<void> {
+  await upsertBookmarkTagFromAnalysis({
+    bookmark: {
+      id: bookmarkId,
+      title,
+      url,
+      path
+    },
+    analysis: {
+      summary: aiResult.summary,
+      contentType: aiResult.contentType,
+      topics: aiResult.topics,
+      tags: aiResult.tags,
+      aliases: aiResult.aliases,
+      confidence: aiResult.confidence,
+      extraction: buildAutoExtractionSnapshot(pageContext)
+    },
+    source: 'auto_analyze',
+    model: settings.model,
+    extraction: buildAutoExtractionSnapshot(pageContext)
+  })
+}
+
+async function maybeNotifyInboxClassified({
+  bookmarkId,
+  title,
+  folderPath,
+  moved,
+  message
+}: {
+  bookmarkId: string
+  title: string
+  folderPath: string
+  moved: boolean
+  message: string
+}): Promise<void> {
+  const settings = await loadInboxSettings()
+  if (!settings.notifyOnClassified) {
+    return
+  }
+
+  await showInboxNotification({
+    notificationId: `${INBOX_CLASSIFIED_NOTIFICATION_PREFIX}${bookmarkId}`,
+    title: moved ? `已归类到 ${truncateText(folderPath, 44)}` : 'Inbox 分析完成',
+    message: truncateText(message || title, 120),
+    buttons: moved ? [{ title: '撤销移动' }] : undefined
+  })
+}
+
+function showInboxNotification({
+  notificationId,
+  title,
+  message,
+  buttons
+}: {
+  notificationId: string
+  title: string
+  message: string
+  buttons?: chrome.notifications.ButtonOptions[]
+}): Promise<void> {
+  return new Promise((resolve) => {
+    if (!chrome.notifications?.create) {
+      resolve()
+      return
+    }
+
+    chrome.notifications.create(notificationId, {
+      type: 'basic',
+      iconUrl: 'src/assets/icon128.png',
+      title,
+      message,
+      priority: 0,
+      buttons
+    }, () => {
+      void chrome.runtime.lastError
+      resolve()
+    })
+  })
+}
+
+async function undoLastInboxAutoMove(): Promise<InboxUndoLastMoveResult> {
+  const state = await loadInboxState()
+  const undoMove = state.lastUndoMove
+  if (!undoMove || undoMove.expiresAt <= Date.now()) {
+    await clearInboxUndoMove()
+    throw new Error('没有可撤销的 Inbox 自动移动。')
+  }
+
+  const bookmark = await getBookmarkById(undoMove.bookmarkId)
+  if (!bookmark?.url) {
+    await clearInboxUndoMove(undoMove.bookmarkId)
+    throw new Error('原书签已不存在，无法撤销。')
+  }
+
+  const movedNode = await moveBookmarkNode(undoMove.bookmarkId, undoMove.toFolderId)
+  await updateInboxItem(undoMove.bookmarkId, {
+    status: 'undone',
+    lastError: ''
+  }).catch((error) => {
+    console.warn('[Curator] Inbox 撤销状态更新失败', error)
+  })
+  await clearInboxUndoMove(undoMove.bookmarkId)
+  await showInboxNotification({
+    notificationId: `${INBOX_CAPTURE_NOTIFICATION_PREFIX}undo-${undoMove.bookmarkId}`,
+    title: '已撤销 Inbox 自动移动',
+    message: '书签已移回 Inbox / 待整理。'
+  })
+
+  return {
+    bookmarkId: String(movedNode.id),
+    parentId: String(movedNode.parentId || undoMove.toFolderId),
+    title: String(movedNode.title || bookmark.title || '未命名网页')
+  }
 }
 
 async function markAutoAnalyzeQueueEntryFailed(bookmarkId: string, lastError: string): Promise<void> {
@@ -1579,25 +1989,6 @@ function appendBookmarkAddHistory(entry: BookmarkAddHistoryEntry): Promise<void>
 
   bookmarkAddHistoryWriteQueue = task.catch(() => {})
   return task
-}
-
-async function persistPendingAutoAnalyzeNotice({
-  bookmarkTitle,
-  folderPath,
-  confidence
-}: {
-  bookmarkTitle: string
-  folderPath: string
-  confidence: number
-}): Promise<void> {
-  await setLocalStorage({
-    [STORAGE_KEYS.pendingAutoAnalyzeNotice]: {
-      createdAt: Date.now(),
-      bookmarkTitle: cleanText(bookmarkTitle),
-      folderPath: cleanText(folderPath),
-      confidence: normalizeAutoConfidence(confidence)
-    }
-  })
 }
 
 async function persistAutoAnalyzeStatus(

@@ -26,6 +26,7 @@
             <p id="options-settings-nav-label" class="options-sidebar-label">设置分类</p>
             <nav class="options-nav" aria-labelledby="options-settings-nav-label">
               <a class="options-nav-link" href="#general" data-section-link="general">通用设置</a>
+              <a class="options-nav-link" href="#backup" data-section-link="backup">数据与备份</a>
             </nav>
           </div>
           <div class="options-nav-group">
@@ -33,10 +34,11 @@
             <nav class="options-nav" aria-labelledby="options-bookmark-nav-label">
               <a class="options-nav-link" href="#availability" data-section-link="availability">书签可用性检测</a>
               <a class="options-nav-link" href="#duplicates" data-section-link="duplicates">重复书签检测</a>
-              <a class="options-nav-link" href="#recycle" data-section-link="recycle">回收站</a>
+              <a class="options-nav-link" href="#folder-cleanup" data-section-link="folder-cleanup">文件夹清理</a>
               <a class="options-nav-link" href="#history" data-section-link="history">检测历史</a>
               <a class="options-nav-link" href="#redirects" data-section-link="redirects">重定向更新</a>
               <a class="options-nav-link" href="#ignore" data-section-link="ignore">忽略规则</a>
+              <a class="options-nav-link" href="#recycle" data-section-link="recycle">回收站</a>
             </nav>
           </div>
           <div class="options-nav-group">
@@ -44,7 +46,6 @@
             <nav class="options-nav" aria-labelledby="options-ai-nav-label">
               <a class="options-nav-link" href="#bookmark-history" data-section-link="bookmark-history">自动分析添加历史</a>
               <a class="options-nav-link" href="#ai" data-section-link="ai">标签与命名建议</a>
-              <a class="options-nav-link" href="#ai-tag-data" data-section-link="ai-tag-data">标签数据</a>
             </nav>
           </div>
           <a class="options-dashboard-entry" href="#dashboard" data-section-link="dashboard">
@@ -108,6 +109,47 @@
                   </div>
                   <label class="ai-switch" for="ai-allow-remote-parser">
                     <input id="ai-allow-remote-parser" type="checkbox" aria-label="开启 Jina Reader 远程解析 URL">
+                    <span class="ai-switch-track" aria-hidden="true"></span>
+                  </label>
+                </div>
+
+                <div class="ai-feature-switch-row">
+                  <div class="ai-feature-switch-copy">
+                    <div class="ai-feature-title-row">
+                      <strong>
+                        自动移动到推荐文件夹
+                        <span
+                          class="ai-help-tooltip"
+                          tabindex="0"
+                          aria-label="快捷键收藏会先进入 Inbox / 待整理；AI 置信度足够时自动移动到推荐文件夹。"
+                          data-tooltip="快捷键收藏会先进入 Inbox / 待整理；AI 置信度足够时自动移动到推荐文件夹。"
+                        >?</span>
+                      </strong>
+                      <span id="inbox-workflow-status" class="options-chip muted ai-inline-status">Inbox 开启</span>
+                    </div>
+                  </div>
+                  <label class="ai-switch" for="inbox-auto-move-to-recommended-folder">
+                    <input id="inbox-auto-move-to-recommended-folder" type="checkbox" aria-label="自动移动到推荐文件夹">
+                    <span class="ai-switch-track" aria-hidden="true"></span>
+                  </label>
+                </div>
+
+                <div class="ai-feature-switch-row">
+                  <div class="ai-feature-switch-copy">
+                    <div class="ai-feature-title-row">
+                      <strong>
+                        只打标签，不自动移动
+                        <span
+                          class="ai-help-tooltip"
+                          tabindex="0"
+                          aria-label="开启后，快捷键收藏仍保存到 Inbox / 待整理，只生成标签和摘要，不移动文件夹。"
+                          data-tooltip="开启后，快捷键收藏仍保存到 Inbox / 待整理，只生成标签和摘要，不移动文件夹。"
+                        >?</span>
+                      </strong>
+                    </div>
+                  </div>
+                  <label class="ai-switch" for="inbox-tag-only-no-auto-move">
+                    <input id="inbox-tag-only-no-auto-move" type="checkbox" aria-label="只打标签，不自动移动">
                     <span class="ai-switch-track" aria-hidden="true"></span>
                   </label>
                 </div>
@@ -269,20 +311,6 @@
                       <button id="ai-manage-models" class="ai-inline-action" type="button">设置更多模型</button>
                       里追加。
                     </p>
-                    <label class="ai-provider-check" for="ai-auto-select-high">
-                      <input id="ai-auto-select-high" type="checkbox">
-                      <span>自动选中高置信建议</span>
-                    </label>
-                    <label class="ai-settings-field" for="ai-system-prompt">
-                      <span>系统提示词</span>
-                      <textarea
-                        id="ai-system-prompt"
-                        class="ai-settings-textarea"
-                        rows="5"
-                        spellcheck="false"
-                        placeholder="留空使用默认提示词"
-                      ></textarea>
-                    </label>
                   </div>
                 </details>
 
@@ -294,6 +322,56 @@
                   </div>
                 </div>
               </div>
+            </div>
+
+            <div class="options-group ai-naming-settings-card">
+              <div class="ai-feature-settings-head">
+                <div>
+                  <strong>网页快照与全文索引</strong>
+                  <p id="content-snapshot-status" class="ai-settings-subtitle">默认保存摘要、标题、规范链接、最终链接和内容类型；全文需要手动开启。</p>
+                </div>
+                <span class="options-chip muted">本地存储</span>
+              </div>
+              <label class="ai-feature-switch-row" for="content-snapshot-enabled">
+                <span class="ai-feature-switch-copy">
+                  <strong>保存网页快照</strong>
+                  <span class="ai-feature-secondary">新增网页书签后在本地保存轻量索引，供搜索使用。</span>
+                </span>
+                <span class="ai-switch">
+                  <input id="content-snapshot-enabled" type="checkbox">
+                  <span class="ai-switch-track" aria-hidden="true"></span>
+                </span>
+              </label>
+              <label class="ai-feature-switch-row" for="content-snapshot-full-text">
+                <span class="ai-feature-switch-copy">
+                  <strong>保存全文纯文本</strong>
+                  <span class="ai-feature-secondary">超过 20KB 的单条全文会写入 IndexedDB，不写入 chrome.storage.local。</span>
+                </span>
+                <span class="ai-switch">
+                  <input id="content-snapshot-full-text" type="checkbox">
+                  <span class="ai-switch-track" aria-hidden="true"></span>
+                </span>
+              </label>
+              <label class="ai-feature-switch-row" for="content-snapshot-search-full-text">
+                <span class="ai-feature-switch-copy">
+                  <strong>搜索全文索引</strong>
+                  <span class="ai-feature-secondary">搜索默认纳入摘要和标题；开启后再纳入已保存全文。</span>
+                </span>
+                <span class="ai-switch">
+                  <input id="content-snapshot-search-full-text" type="checkbox">
+                  <span class="ai-switch-track" aria-hidden="true"></span>
+                </span>
+              </label>
+              <label class="ai-feature-switch-row" for="content-snapshot-local-only">
+                <span class="ai-feature-switch-copy">
+                  <strong>仅本地保存，不上传 AI</strong>
+                  <span class="ai-feature-secondary">新增书签只保存快照，不把正文发送给 AI 生成标签。</span>
+                </span>
+                <span class="ai-switch">
+                  <input id="content-snapshot-local-only" type="checkbox">
+                  <span class="ai-switch-track" aria-hidden="true"></span>
+                </span>
+              </label>
             </div>
           </section>
 
@@ -317,10 +395,33 @@
             </div>
 
             <div class="options-group dashboard-toolbar">
-              <label class="options-search dashboard-search">
-                <span class="options-search-label">搜索书签</span>
-                <input id="dashboard-query" class="options-search-input" type="search" spellcheck="false" placeholder="标题、域名、路径、标签、摘要">
-              </label>
+              <div class="dashboard-search-box">
+                <label class="options-search dashboard-search">
+                  <span class="options-search-label">搜索书签</span>
+                  <span class="dashboard-query-row">
+                    <input id="dashboard-query" class="options-search-input" type="search" spellcheck="false" placeholder="site:github.com react / folder:前端 type:文档 / 最近一个月 AI 教程 -youtube">
+                    <button id="dashboard-search-help-toggle" class="options-button secondary small" type="button" aria-expanded="false" aria-controls="dashboard-search-help-panel">帮助</button>
+                  </span>
+                </label>
+                <div id="dashboard-search-help-panel" class="dashboard-search-help hidden" role="dialog" aria-label="搜索语法帮助">
+                  <strong>高级搜索语法</strong>
+                  <ul>
+                    <li><code>site:github.com</code> 限定站点或域名。</li>
+                    <li><code>folder:前端</code> 限定文件夹路径。</li>
+                    <li><code>type:文档</code> 限定 AI 识别的内容类型。</li>
+                    <li><code>最近一个月</code>、<code>本周</code>、<code>今天</code> 限定添加时间。</li>
+                    <li><code>-youtube</code> 排除包含该词的结果。</li>
+                  </ul>
+                </div>
+                <div id="dashboard-search-chips" class="dashboard-search-chips hidden" aria-label="当前搜索条件"></div>
+                <div class="dashboard-saved-search-row" aria-label="保存的搜索">
+                  <select id="dashboard-saved-search-select" class="options-search-input compact" aria-label="选择保存的搜索">
+                    <option value="">选择保存搜索</option>
+                  </select>
+                  <button id="dashboard-save-search" class="options-button secondary small" type="button">保存搜索</button>
+                  <button id="dashboard-delete-saved-search" class="options-button danger small" type="button">删除</button>
+                </div>
+              </div>
               <div class="dashboard-toolbar-actions">
                 <button id="dashboard-select-visible-top" class="options-button secondary small" type="button" data-dashboard-action="select-visible">选择当前可见</button>
                 <span id="dashboard-result-count" class="option-value">0 条书签</span>
@@ -720,16 +821,6 @@
               <p id="ai-progress-copy" class="detect-status-copy">先读取书签指向的网页内容，再把结果分批发送给 AI 模型生成标签和命名建议。</p>
             </div>
 
-            <div class="options-group ai-tag-data-card ai-tag-data-entry-card">
-              <div class="detect-results-header">
-                <div>
-                  <strong>标签数据</strong>
-                  <p class="detect-results-subtitle">管理已保存的标签数据，包含 AI 生成内容和手动维护标签。</p>
-                </div>
-                <a class="options-button secondary small" href="#ai-tag-data" data-section-link="ai-tag-data">打开标签数据</a>
-              </div>
-            </div>
-
             <div class="detect-summary-grid">
               <article class="summary-card metric-card metric-total">
                 <span class="summary-label">可处理</span>
@@ -815,20 +906,20 @@
           </section>
 
           <section
-            id="ai-tag-data"
+            id="backup"
             class="options-panel"
-            data-section-panel="ai-tag-data"
-            aria-labelledby="ai-tag-data-title"
+            data-section-panel="backup"
+            aria-labelledby="backup-title"
             hidden
           >
-            <p class="options-section-label">AI Tag Data</p>
-            <h1 id="ai-tag-data-title">标签数据</h1>
+            <p class="options-section-label">Data & Backup</p>
+            <h1 id="backup-title">数据与备份</h1>
 
             <div class="options-group ai-tag-data-card">
               <div class="detect-results-header ai-tag-data-head">
                 <div>
-                  <strong>已保存标签数据</strong>
-                  <p class="detect-results-subtitle">这里保存 AI 生成的摘要、主题和别名，以及 AI 生成或手动维护的标签。可导出备份后再导入恢复，不包含 API Key 或 AI 设置。</p>
+                  <strong>标签数据</strong>
+                  <p class="detect-results-subtitle">这里保存 AI 生成的摘要、主题和别名，以及 AI 生成或手动维护的标签。可单独导出/导入，也会包含在完整备份中。</p>
                 </div>
                 <span id="ai-tag-data-count" class="option-value">0 条记录</span>
               </div>
@@ -838,11 +929,43 @@
                   <p id="ai-tag-data-status" class="detect-status-copy"></p>
                 </div>
                 <div class="detect-results-actions">
-                  <button id="ai-tag-export" class="options-button secondary small" type="button">导出</button>
-                  <button id="ai-tag-import" class="options-button secondary small" type="button">导入</button>
-                  <button id="ai-tag-clear" class="options-button danger small" type="button">清空</button>
+                  <button id="ai-tag-export" class="options-button secondary small" type="button">导出标签数据</button>
+                  <button id="ai-tag-import" class="options-button secondary small" type="button">导入标签数据</button>
+                  <button id="ai-tag-clear" class="options-button danger small" type="button">清空标签数据</button>
                 </div>
                 <input id="ai-tag-import-input" class="hidden" type="file" accept="application/json,.json">
+              </div>
+            </div>
+
+            <div class="options-group ai-tag-data-card">
+              <div class="detect-results-header ai-tag-data-head">
+                <div>
+                  <strong>完整备份</strong>
+                  <p class="detect-results-subtitle">导出 Chrome 书签树、标签数据、回收站、忽略规则、重定向历史、新标签页配置和 AI 设置；不会导出 API Key。</p>
+                </div>
+                <div class="detect-results-actions">
+                  <button id="backup-export" class="options-button small" type="button">导出完整备份</button>
+                  <button id="backup-import" class="options-button secondary small" type="button">导入并预览</button>
+                </div>
+                <input id="backup-import-input" class="hidden" type="file" accept="application/json,.json">
+              </div>
+              <p id="backup-status" class="detect-status-copy"></p>
+            </div>
+
+            <div class="options-group ai-tag-data-card">
+              <div class="detect-results-header ai-tag-data-row">
+                <div>
+                  <strong>恢复预览</strong>
+                  <p class="detect-results-subtitle">导入文件后先查看差异，再选择恢复范围；不会直接替换整个 Chrome 书签树。</p>
+                </div>
+                <div class="detect-results-actions">
+                  <button id="backup-restore-tags" class="options-button secondary small" type="button" disabled>只恢复标签数据</button>
+                  <button id="backup-restore-newtab" class="options-button secondary small" type="button" disabled>只恢复新标签页配置</button>
+                  <button id="backup-restore-safe-full" class="options-button small" type="button" disabled>恢复全部可安全恢复的数据</button>
+                </div>
+              </div>
+              <div id="backup-preview" class="detect-results">
+                <div class="detect-empty">请选择备份文件进行预览。</div>
               </div>
             </div>
           </section>
@@ -956,6 +1079,66 @@
               </div>
               <div id="duplicate-groups" class="detect-results">
                 <div class="detect-empty">正在分析重复书签。</div>
+              </div>
+            </div>
+          </section>
+
+          <section
+            id="folder-cleanup"
+            class="options-panel"
+            data-section-panel="folder-cleanup"
+            aria-labelledby="folder-cleanup-title"
+            hidden
+          >
+            <p class="options-section-label">文件夹清理</p>
+            <h1 id="folder-cleanup-title">文件夹清理</h1>
+
+            <div class="options-group">
+              <div class="option-row">
+                <div class="option-copy">
+                  <strong>建议和预览优先</strong>
+                  <p>先重新读取当前 Chrome 书签树，再扫描空文件夹、深层低价值文件夹、单一路径、同名文件夹和超大文件夹；删除、合并、移动和拆分都会在确认后执行，并先调用自动备份 hook。拆分会记录本次移动，可在建议区撤销本次拆分。</p>
+                </div>
+                <div class="detect-results-actions">
+                  <span id="folder-cleanup-status" class="options-chip muted">未扫描</span>
+                  <button id="folder-cleanup-analyze" class="options-button small" type="button">重新扫描</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="detect-summary-grid compact-grid">
+              <article class="summary-card compact metric-card metric-total">
+                <span class="summary-label">建议总数</span>
+                <strong id="folder-cleanup-summary-total">0</strong>
+              </article>
+              <article class="summary-card compact metric-card metric-danger">
+                <span class="summary-label">空文件夹</span>
+                <strong id="folder-cleanup-summary-empty">0</strong>
+              </article>
+              <article class="summary-card compact metric-card metric-warning">
+                <span class="summary-label">深层低价值</span>
+                <strong id="folder-cleanup-summary-deep">0</strong>
+              </article>
+              <article class="summary-card compact metric-card metric-info">
+                <span class="summary-label">同名合并</span>
+                <strong id="folder-cleanup-summary-same-name">0</strong>
+              </article>
+              <article class="summary-card compact metric-card metric-muted">
+                <span class="summary-label">超大拆分</span>
+                <strong id="folder-cleanup-summary-large">0</strong>
+              </article>
+            </div>
+
+            <div class="options-group detect-results-group">
+              <div class="detect-results-header">
+                <div>
+                  <strong>清理建议</strong>
+                  <p id="folder-cleanup-results-subtitle" class="detect-results-subtitle">所有建议默认只预览，不会自动修改书签。</p>
+                </div>
+                <span id="folder-cleanup-count" class="option-value">0 条建议</span>
+              </div>
+              <div id="folder-cleanup-results" class="detect-results">
+                <div class="detect-empty">点击重新扫描后，这里会展示可预览的文件夹清理建议。</div>
               </div>
             </div>
           </section>

@@ -23,9 +23,9 @@ export const SECTION_META = {
     label: 'Tag & Naming Suggestions',
     title: '标签与命名建议'
   },
-  'ai-tag-data': {
-    label: 'AI Tag Data',
-    title: '标签数据'
+  backup: {
+    label: 'Data & Backup',
+    title: '数据与备份'
   },
   redirects: {
     label: 'Redirects',
@@ -34,6 +34,10 @@ export const SECTION_META = {
   duplicates: {
     label: 'Duplicates',
     title: '重复书签'
+  },
+  'folder-cleanup': {
+    label: '文件夹清理',
+    title: '文件夹清理'
   },
   ignore: {
     label: 'Ignore Rules',
