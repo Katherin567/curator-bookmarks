@@ -67,6 +67,13 @@ import {
   type PopupSearchResult
 } from './search.js'
 import {
+  deleteSavedSearch,
+  getSavedSearchesForScope,
+  loadSavedSearchIndex,
+  parseSearchQuery,
+  saveSearch
+} from '../shared/search-query.js'
+import {
   buildLocalNaturalSearchPlan,
   filterBookmarksByNaturalDateRange,
   getNaturalSearchStatusLabel,
@@ -175,7 +182,7 @@ const NATURAL_SEARCH_SCHEMA = {
 
 document.addEventListener('DOMContentLoaded', () => {
   cacheDom()
-  void hydratePopupPreferences().finally(() => {
+  void Promise.all([hydratePopupPreferences(), hydrateSavedSearches()]).finally(() => {
     bindEvents()
     render()
     void showPendingAutoAnalyzeNotice()
@@ -206,6 +213,19 @@ function bindEvents() {
     setSearchQuery('', { immediate: true })
     showViewNotice('已清空搜索')
     dom.searchInput.focus()
+  })
+  dom.searchHelpToggle.addEventListener('click', () => {
+    state.searchHelpOpen = !state.searchHelpOpen
+    renderSearchTools()
+  })
+  dom.savedSearchSelect.addEventListener('change', () => {
+    applySelectedSavedSearch()
+  })
+  dom.saveSearch.addEventListener('click', () => {
+    void saveCurrentSearch()
+  })
+  dom.deleteSavedSearch.addEventListener('click', () => {
+    void deleteCurrentSavedSearch()
   })
   dom.folderFilterTrigger.addEventListener('click', openFilterDialog)
   dom.clearFolderFilter.addEventListener('click', clearFolderFilter)
@@ -260,6 +280,16 @@ async function hydratePopupPreferences() {
     state.naturalSearchEnabled = preferences.naturalSearchEnabled
   } catch {
     state.naturalSearchEnabled = DEFAULT_POPUP_PREFERENCES.naturalSearchEnabled
+  }
+}
+
+async function hydrateSavedSearches() {
+  try {
+    state.savedSearchIndex = await loadSavedSearchIndex()
+    state.savedSearches = getSavedSearchesForScope(state.savedSearchIndex, 'popup')
+  } catch {
+    state.savedSearchIndex = { version: 1, updatedAt: 0, searches: [] }
+    state.savedSearches = []
   }
 }
 
@@ -1121,6 +1151,93 @@ function renderBanner() {
     getNaturalSearchToggleAriaLabel(naturalSearchFallback, naturalSearchPending)
   )
   dom.naturalSearchToggle.title = getNaturalSearchToggleTitle(naturalSearchFallback, naturalSearchPending)
+  renderSearchTools()
+}
+
+function renderSearchTools() {
+  const parsed = parseSearchQuery(state.searchQuery)
+  const chips = parsed.chips
+  dom.searchHelpPanel.classList.toggle('hidden', !state.searchHelpOpen)
+  dom.searchHelpToggle.setAttribute('aria-expanded', String(state.searchHelpOpen))
+  dom.searchChips.classList.toggle('hidden', chips.length === 0)
+  dom.searchChips.innerHTML = chips
+    .map((chip) => `<span class="search-filter-chip ${escapeAttr(chip.kind)}">${escapeHtml(chip.label)}</span>`)
+    .join('')
+  dom.savedSearchSelect.innerHTML = [
+    '<option value="">选择保存搜索</option>',
+    ...state.savedSearches.map((item) => {
+      const selected = item.id === state.selectedSavedSearchId ? ' selected' : ''
+      return `<option value="${escapeAttr(item.id)}"${selected}>${escapeHtml(item.name)}</option>`
+    })
+  ].join('')
+  dom.saveSearch.disabled = !state.searchQuery.trim()
+  dom.deleteSavedSearch.disabled = !state.selectedSavedSearchId
+}
+
+function applySelectedSavedSearch() {
+  const savedSearchId = String(dom.savedSearchSelect.value || '')
+  const savedSearch = state.savedSearches.find((item) => item.id === savedSearchId)
+  state.selectedSavedSearchId = savedSearch?.id || ''
+  if (!savedSearch) {
+    renderSearchTools()
+    return
+  }
+  setSearchQuery(savedSearch.query, { immediate: true })
+  showViewNotice(`已应用保存搜索：${savedSearch.name}`)
+  dom.searchInput.focus()
+}
+
+async function saveCurrentSearch() {
+  const query = state.searchQuery.trim()
+  if (!query) {
+    showToast({ type: 'error', message: '请输入搜索条件后再保存。' })
+    return
+  }
+
+  const defaultName = query.length > 28 ? `${query.slice(0, 28)}...` : query
+  const name = window.prompt('为这组搜索条件命名', defaultName)
+  if (name === null) {
+    return
+  }
+
+  try {
+    state.savedSearchIndex = await saveSearch(state.savedSearchIndex, {
+      name,
+      query,
+      scope: 'popup'
+    })
+    state.savedSearches = getSavedSearchesForScope(state.savedSearchIndex, 'popup')
+    const saved = state.savedSearches.find((item) => item.query === query && item.name === (name.trim() || defaultName))
+      || state.savedSearches.find((item) => item.query === query)
+    state.selectedSavedSearchId = saved?.id || ''
+    renderSearchTools()
+    showToast({ type: 'success', message: '已保存搜索条件。' })
+  } catch (error) {
+    showToast({
+      type: 'error',
+      message: error instanceof Error ? `保存搜索失败：${error.message}` : '保存搜索失败。'
+    })
+  }
+}
+
+async function deleteCurrentSavedSearch() {
+  const savedSearch = state.savedSearches.find((item) => item.id === state.selectedSavedSearchId)
+  if (!savedSearch) {
+    return
+  }
+
+  try {
+    state.savedSearchIndex = await deleteSavedSearch(state.savedSearchIndex, savedSearch.id)
+    state.savedSearches = getSavedSearchesForScope(state.savedSearchIndex, 'popup')
+    state.selectedSavedSearchId = ''
+    renderSearchTools()
+    showToast({ type: 'success', message: '已删除保存搜索。' })
+  } catch (error) {
+    showToast({
+      type: 'error',
+      message: error instanceof Error ? `删除搜索失败：${error.message}` : '删除搜索失败。'
+    })
+  }
 }
 
 function getSearchModeView(isFallback: boolean, isPending: boolean) {
@@ -1128,8 +1245,8 @@ function getSearchModeView(isFallback: boolean, isPending: boolean) {
     return {
       chip: '本地',
       className: '',
-      placeholder: '本地搜索标题、网址或标签',
-      ariaLabel: '本地搜索书签标题、网址或标签'
+      placeholder: 'site:github.com react / folder:前端 type:文档 / 最近一个月 AI 教程 -youtube',
+      ariaLabel: '本地搜索书签标题、网址、标签或高级语法'
     }
   }
 
@@ -1146,7 +1263,7 @@ function getSearchModeView(isFallback: boolean, isPending: boolean) {
     return {
       chip: '本地NL',
       className: 'local-natural',
-      placeholder: '本地自然语言筛选书签',
+      placeholder: '最近一个月 AI 教程 -youtube',
       ariaLabel: '本地自然语言筛选书签'
     }
   }
@@ -1154,7 +1271,7 @@ function getSearchModeView(isFallback: boolean, isPending: boolean) {
   return {
     chip: 'AI改写',
     className: 'ai',
-    placeholder: '用自然语言描述要找的书签',
+    placeholder: '最近一个月 AI 教程 -youtube',
     ariaLabel: '使用 AI 改写的自然语言搜索'
   }
 }

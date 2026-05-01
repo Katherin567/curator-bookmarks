@@ -14,6 +14,14 @@ import { createAutoBackupBeforeDangerousOperation } from '../../shared/backup.js
 import { ROOT_ID } from '../../shared/constants.js'
 import { renderDotMatrixLoader } from '../../shared/dot-matrix-loader.js'
 import { cancelExitMotion, closeWithExitMotion } from '../../shared/motion.js'
+import {
+  deleteSavedSearch,
+  getSavedSearchesForScope,
+  loadSavedSearchIndex,
+  matchesParsedSearchQuery,
+  parseSearchQuery,
+  saveSearch
+} from '../../shared/search-query.js'
 import { aiNamingState, availabilityState, dashboardState } from '../shared-options/state.js'
 import { dom } from '../shared-options/dom.js'
 import { escapeAttr, escapeHtml } from '../shared-options/html.js'
@@ -214,13 +222,24 @@ export function buildDashboardModel({
 }
 
 export function filterDashboardItems(items: DashboardItem[], filters: DashboardFilters = {}): DashboardItem[] {
-  const normalizedQuery = normalizeText(filters.query || '')
+  const parsedQuery = parseSearchQuery(filters.query || '')
   const folderId = String(filters.folderId || '').trim()
   const domain = String(filters.domain || '').trim()
   const month = String(filters.month || '').trim()
 
   return items.filter((item) => {
-    if (normalizedQuery && !item.searchText.includes(normalizedQuery)) {
+    if (!matchesParsedSearchQuery(parsedQuery, {
+      searchText: item.searchText,
+      domain: item.domain,
+      url: item.normalizedUrl || item.url,
+      path: item.path,
+      type: item.searchText,
+      dateAdded: item.dateAdded
+    })) {
+      return false
+    }
+
+    if (parsedQuery.textTerms.length && !parsedQuery.textTerms.every((term) => item.searchText.includes(term))) {
       return false
     }
 
@@ -343,6 +362,16 @@ export function removeDashboardSelectionIds(bookmarkIds: unknown[]): void {
   }
 }
 
+export async function hydrateDashboardSavedSearches(): Promise<void> {
+  try {
+    dashboardState.savedSearchIndex = await loadSavedSearchIndex()
+    dashboardState.savedSearches = getSavedSearchesForScope(dashboardState.savedSearchIndex, 'dashboard')
+  } catch {
+    dashboardState.savedSearchIndex = { version: 1, updatedAt: 0, searches: [] }
+    dashboardState.savedSearches = []
+  }
+}
+
 export function renderDashboardSection(): void {
   if (!dom.dashboardResults) {
     return
@@ -369,6 +398,7 @@ export function renderDashboardSection(): void {
     })
     : escapeHtml(dashboardState.statusMessage || '')
   dom.dashboardQuery.value = dashboardState.query
+  renderDashboardSearchTools()
 
   renderDashboardSelectionBar(visibleItems)
   renderDashboardCards(visibleItems)
@@ -399,6 +429,11 @@ export function handleDashboardInput(event: Event): void {
   if (target.id === 'dashboard-tag-editor-input') {
     dashboardState.tagEditorDraft = target.value
     dashboardState.tagEditorStatus = ''
+    return
+  }
+
+  if (target.id === 'dashboard-saved-search-select') {
+    applySelectedDashboardSavedSearch(target.value)
     return
   }
 
@@ -443,6 +478,13 @@ export async function handleDashboardClick(event: Event, callbacks: DashboardCal
       await deleteSelectedDashboardItems(callbacks)
     } else if (action === 'exit-dashboard') {
       window.location.hash = '#general'
+    } else if (action === 'toggle-search-help') {
+      dashboardState.searchHelpOpen = !dashboardState.searchHelpOpen
+      renderDashboardSearchTools()
+    } else if (action === 'save-search') {
+      await saveCurrentDashboardSearch()
+    } else if (action === 'delete-saved-search') {
+      await deleteCurrentDashboardSavedSearch()
     } else if (action === 'edit-tags') {
       const bookmarkId = String(actionButton.getAttribute('data-dashboard-bookmark-id') || '').trim()
       openDashboardTagEditor(bookmarkId)
@@ -463,6 +505,25 @@ export async function handleDashboardClick(event: Event, callbacks: DashboardCal
   const copyButton = target.closest<HTMLElement>('[data-dashboard-copy]')
   if (copyButton) {
     await copyDashboardBookmarkUrl(String(copyButton.getAttribute('data-dashboard-copy') || '').trim())
+    return
+  }
+
+  const helpToggle = target.closest<HTMLElement>('#dashboard-search-help-toggle')
+  if (helpToggle) {
+    dashboardState.searchHelpOpen = !dashboardState.searchHelpOpen
+    renderDashboardSearchTools()
+    return
+  }
+
+  const saveButton = target.closest<HTMLElement>('#dashboard-save-search')
+  if (saveButton) {
+    await saveCurrentDashboardSearch()
+    return
+  }
+
+  const deleteButton = target.closest<HTMLElement>('#dashboard-delete-saved-search')
+  if (deleteButton) {
+    await deleteCurrentDashboardSavedSearch()
   }
 }
 
@@ -1046,6 +1107,98 @@ function getDashboardRenderData() {
 function getDashboardTagRecord(bookmarkId: string): BookmarkTagRecord | null {
   const tagIndex = normalizeBookmarkTagIndex(aiNamingState.tagIndex)
   return tagIndex.records[String(bookmarkId)] || null
+}
+
+function renderDashboardSearchTools(): void {
+  const parsed = parseSearchQuery(dashboardState.query)
+  const chips = parsed.chips
+
+  dom.dashboardSearchHelpPanel?.classList.toggle('hidden', !dashboardState.searchHelpOpen)
+  dom.dashboardSearchHelpToggle?.setAttribute('aria-expanded', String(dashboardState.searchHelpOpen))
+  dom.dashboardSearchChips?.classList.toggle('hidden', chips.length === 0)
+  if (dom.dashboardSearchChips) {
+    dom.dashboardSearchChips.innerHTML = chips
+      .map((chip) => `<span class="dashboard-search-chip ${escapeAttr(chip.kind)}">${escapeHtml(chip.label)}</span>`)
+      .join('')
+  }
+
+  if (dom.dashboardSavedSearchSelect) {
+    dom.dashboardSavedSearchSelect.innerHTML = [
+      '<option value="">选择保存搜索</option>',
+      ...dashboardState.savedSearches.map((item) => {
+        const selected = item.id === dashboardState.selectedSavedSearchId ? ' selected' : ''
+        return `<option value="${escapeAttr(item.id)}"${selected}>${escapeHtml(item.name)}</option>`
+      })
+    ].join('')
+  }
+
+  if (dom.dashboardSaveSearch) {
+    dom.dashboardSaveSearch.disabled = !dashboardState.query.trim()
+  }
+  if (dom.dashboardDeleteSavedSearch) {
+    dom.dashboardDeleteSavedSearch.disabled = !dashboardState.selectedSavedSearchId
+  }
+}
+
+function applySelectedDashboardSavedSearch(savedSearchId: string): void {
+  const savedSearch = dashboardState.savedSearches.find((item) => item.id === String(savedSearchId))
+  dashboardState.selectedSavedSearchId = savedSearch?.id || ''
+  if (!savedSearch) {
+    renderDashboardSearchTools()
+    return
+  }
+
+  dashboardState.query = savedSearch.query
+  resetDashboardVirtualScroll()
+  renderDashboardSection()
+}
+
+async function saveCurrentDashboardSearch(): Promise<void> {
+  const query = dashboardState.query.trim()
+  if (!query) {
+    dashboardState.statusMessage = '请输入搜索条件后再保存。'
+    renderDashboardSection()
+    return
+  }
+
+  const defaultName = query.length > 36 ? `${query.slice(0, 36)}...` : query
+  const name = window.prompt('为这组搜索条件命名', defaultName)
+  if (name === null) {
+    return
+  }
+
+  try {
+    dashboardState.savedSearchIndex = await saveSearch(dashboardState.savedSearchIndex, {
+      name,
+      query,
+      scope: 'dashboard'
+    })
+    dashboardState.savedSearches = getSavedSearchesForScope(dashboardState.savedSearchIndex, 'dashboard')
+    const saved = dashboardState.savedSearches.find((item) => item.query === query && item.name === (name.trim() || defaultName))
+      || dashboardState.savedSearches.find((item) => item.query === query)
+    dashboardState.selectedSavedSearchId = saved?.id || ''
+    dashboardState.statusMessage = '已保存搜索条件。'
+  } catch (error) {
+    dashboardState.statusMessage = error instanceof Error ? `保存搜索失败：${error.message}` : '保存搜索失败。'
+  }
+  renderDashboardSection()
+}
+
+async function deleteCurrentDashboardSavedSearch(): Promise<void> {
+  const savedSearch = dashboardState.savedSearches.find((item) => item.id === dashboardState.selectedSavedSearchId)
+  if (!savedSearch) {
+    return
+  }
+
+  try {
+    dashboardState.savedSearchIndex = await deleteSavedSearch(dashboardState.savedSearchIndex, savedSearch.id)
+    dashboardState.savedSearches = getSavedSearchesForScope(dashboardState.savedSearchIndex, 'dashboard')
+    dashboardState.selectedSavedSearchId = ''
+    dashboardState.statusMessage = '已删除保存搜索。'
+  } catch (error) {
+    dashboardState.statusMessage = error instanceof Error ? `删除搜索失败：${error.message}` : '删除搜索失败。'
+  }
+  renderDashboardSection()
 }
 
 function renderDashboardSelectionBar(visibleItems: DashboardItem[]): void {
