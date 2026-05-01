@@ -285,8 +285,8 @@ export async function buildBackupRestorePreview(
       },
       {
         mode: 'newTabOnly',
-        label: '只恢复新标签页配置',
-        description: '恢复新标签页设置，不恢复背景媒体缓存。'
+        label: '只恢复新标签页设置',
+        description: '恢复书签来源、布局、搜索、时间和背景设置；不恢复背景媒体缓存。'
       },
       {
         mode: 'safeFull',
