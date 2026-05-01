@@ -1702,7 +1702,6 @@ function renderSmartResultCard() {
           value="${escapeAttr(state.smartSuggestedTitle || getCurrentPageTitle())}"
           aria-label="推荐书签标题"
         >
-        <span class="smart-edit-indicator" aria-hidden="true"></span>
       </div>
 
       <p class="smart-section-label">推荐文件夹</p>
