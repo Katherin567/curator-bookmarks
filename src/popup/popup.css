@@ -348,6 +348,22 @@ button:focus-visible {
   transform: translateY(-50%) scale(0.96);
 }
 
+.hero > .search-help-toggle {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  transform: translateY(-50%);
+}
+
+.hero > .search-help-toggle:active {
+  transform: translateY(-50%) scale(0.96);
+}
+
 .hero-copy h1 {
   margin: 0;
   color: var(--accent);

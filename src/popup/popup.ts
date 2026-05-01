@@ -1270,7 +1270,7 @@ function getSearchModeView(isFallback: boolean, isPending: boolean) {
     return {
       chip: '本地',
       className: '',
-      placeholder: 'site:github.com react / folder:前端 type:文档 / 最近一个月 AI 教程 -youtube',
+      placeholder: '',
       ariaLabel: '本地搜索书签标题、网址、标签或高级语法'
     }
   }
@@ -1279,7 +1279,7 @@ function getSearchModeView(isFallback: boolean, isPending: boolean) {
     return {
       chip: '理解中',
       className: 'ai',
-      placeholder: 'AI 正在改写查询',
+      placeholder: '',
       ariaLabel: '自然语言搜索正在使用 AI 改写查询'
     }
   }
@@ -1288,7 +1288,7 @@ function getSearchModeView(isFallback: boolean, isPending: boolean) {
     return {
       chip: '本地NL',
       className: 'local-natural',
-      placeholder: '最近一个月 AI 教程 -youtube',
+      placeholder: '',
       ariaLabel: '本地自然语言筛选书签'
     }
   }
@@ -1296,7 +1296,7 @@ function getSearchModeView(isFallback: boolean, isPending: boolean) {
   return {
     chip: 'AI改写',
     className: 'ai',
-    placeholder: '最近一个月 AI 教程 -youtube',
+    placeholder: '',
     ariaLabel: '使用 AI 改写的自然语言搜索'
   }
 }

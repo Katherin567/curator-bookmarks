@@ -9,6 +9,17 @@
   <body>
     <main class="app-shell">
       <header class="hero">
+        <button
+          id="search-help-toggle"
+          class="search-help-toggle"
+          type="button"
+          aria-label="查看高级搜索语法"
+          aria-expanded="false"
+          aria-controls="search-help-panel"
+          title="高级搜索语法"
+        >
+          ?
+        </button>
         <div class="hero-brand">
           <div class="hero-mark" aria-hidden="true">
             <img class="hero-logo" src="../assets/icon4096.jpg" alt="">
@@ -61,7 +72,6 @@
             autocomplete="off"
             autofocus
             aria-label="搜索书签标题、网址或高级语法"
-            placeholder="site:github.com react / folder:前端 type:文档 / 最近一个月 AI 教程 -youtube"
           >
           <button
             id="natural-search-toggle"
@@ -72,9 +82,6 @@
             title="自然语言搜索"
           >
             AI
-          </button>
-          <button id="search-help-toggle" class="search-help-toggle" type="button" aria-expanded="false" aria-controls="search-help-panel">
-            ?
           </button>
           <button id="clear-search" class="clear-search hidden" type="button" aria-label="清空搜索">
             清空
