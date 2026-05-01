@@ -17,3 +17,14 @@ test('popup search block does not render saved search controls', () => {
   assert.doesNotMatch(popupDom, /savedSearchSelect|saveSearch|deleteSavedSearch/)
   assert.doesNotMatch(popupSource, /hydrateSavedSearches|applySelectedSavedSearch|saveCurrentSearch|deleteCurrentSavedSearch/)
 })
+
+test('popup auto analyze status renders at the bottom of the main layout', () => {
+  const popupHtml = readProjectFile('src/popup/popup.html')
+  const contentIndex = popupHtml.indexOf('<section class="content-shell">')
+  const statusIndex = popupHtml.indexOf('id="auto-analyze-status"')
+  const footerIndex = popupHtml.indexOf('<footer id="smart-footer"')
+
+  assert.ok(contentIndex > -1)
+  assert.ok(statusIndex > contentIndex)
+  assert.ok(footerIndex > statusIndex)
+})
