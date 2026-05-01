@@ -1,0 +1,19 @@
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import test from 'node:test'
+
+function readProjectFile(path) {
+  return readFileSync(resolve(process.cwd(), path), 'utf8')
+}
+
+test('popup search block does not render saved search controls', () => {
+  const popupHtml = readProjectFile('src/popup/popup.html')
+  const popupDom = readProjectFile('src/popup/dom.ts')
+  const popupSource = readProjectFile('src/popup/popup.ts')
+
+  assert.doesNotMatch(popupHtml, /saved-search-row|saved-search-select|save-search|delete-saved-search/)
+  assert.doesNotMatch(popupHtml, /选择保存搜索|保存的搜索/)
+  assert.doesNotMatch(popupDom, /savedSearchSelect|saveSearch|deleteSavedSearch/)
+  assert.doesNotMatch(popupSource, /hydrateSavedSearches|applySelectedSavedSearch|saveCurrentSearch|deleteCurrentSavedSearch/)
+})

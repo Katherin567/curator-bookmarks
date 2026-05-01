@@ -1,5 +1,4 @@
 import type { FolderRecord } from '../shared/types.js'
-import type { SavedSearch, SavedSearchIndex } from '../shared/search-query.js'
 import type { NaturalSearchPlan } from './natural-search.js'
 import type { PopupSearchBookmark, PopupSearchResult } from './search.js'
 
@@ -73,9 +72,6 @@ export interface PopupState {
   searchPending: boolean
   searchCache: Map<string, PopupSearchResult[]>
   searchHelpOpen: boolean
-  savedSearchIndex: SavedSearchIndex
-  savedSearches: SavedSearch[]
-  selectedSavedSearchId: string
   naturalSearchEnabled: boolean
   naturalSearchPending: boolean
   naturalSearchError: string
@@ -152,9 +148,6 @@ export const state: PopupState = {
   searchPending: false,
   searchCache: new Map(),
   searchHelpOpen: false,
-  savedSearchIndex: { version: 1, updatedAt: 0, searches: [] },
-  savedSearches: [],
-  selectedSavedSearchId: '',
   naturalSearchEnabled: false,
   naturalSearchPending: false,
   naturalSearchError: '',
