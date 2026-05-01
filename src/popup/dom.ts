@@ -22,7 +22,6 @@ export function cacheDom(): void {
   dom.openSettings = byId('open-settings')
   dom.autoAnalyzeStatus = byId('auto-analyze-status')
   dom.searchInput = byId('search-input')
-  dom.searchModeChip = byId('search-mode-chip')
   dom.naturalSearchToggle = byId('natural-search-toggle')
   dom.clearSearch = byId('clear-search')
   dom.searchHelpToggle = byId('search-help-toggle')
