@@ -148,10 +148,11 @@ body.background-mask-enabled .newtab-background-mask {
 }
 
 .newtab-utility-stack {
+  --newtab-utility-gap: 14px;
   display: grid;
   width: min(100%, 1229px);
   justify-items: center;
-  gap: 14px;
+  gap: var(--newtab-utility-gap);
 }
 
 .newtab-primary-slot {
@@ -169,7 +170,7 @@ body.background-mask-enabled .newtab-background-mask {
 }
 
 .newtab-page.has-search .newtab-utility-stack {
-  gap: 12px;
+  --newtab-utility-gap: 12px;
 }
 
 .newtab-clock,
@@ -250,8 +251,7 @@ body.background-mask-enabled .newtab-background-mask {
   width: min(540px, 100%);
   height: var(--search-height);
   justify-self: center;
-  transform: translateY(var(--search-offset-y));
-  will-change: transform;
+  margin-top: max(var(--search-offset-y), calc(-1 * var(--newtab-utility-gap)));
 }
 
 .newtab-search {
@@ -2538,7 +2538,7 @@ body.settings-trigger-auto-hide .settings-trigger[aria-expanded="true"] {
   }
 
   .newtab-page.has-search .newtab-utility-stack {
-    gap: 10px;
+    --newtab-utility-gap: 10px;
   }
 
   .newtab-quick-group {
