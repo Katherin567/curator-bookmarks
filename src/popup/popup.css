@@ -923,6 +923,11 @@ body.smart-active .content-shell {
   display: none;
 }
 
+body.smart-active .search-help-toggle,
+body.smart-active .search-help-panel {
+  display: none;
+}
+
 body.smart-active .app-shell {
   gap: 14px;
   padding: 18px 16px 0;
@@ -1309,7 +1314,7 @@ body.smart-active .smart-classifier {
 
 .smart-title-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 34px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   margin-bottom: 14px;
 }
@@ -1321,26 +1326,6 @@ body.smart-active .smart-classifier {
   border: 1px solid #343438;
   border-radius: 7px;
   background: #202024;
-}
-
-.smart-edit-indicator {
-  display: grid;
-  place-items: center;
-  border: 1px solid #343438;
-  border-radius: 7px;
-  color: var(--text-soft);
-  background: #202024;
-}
-
-.smart-edit-indicator::before {
-  content: "";
-  width: 13px;
-  height: 13px;
-  border: 1.5px solid currentColor;
-  border-top: 0;
-  border-left: 0;
-  transform: rotate(45deg);
-  opacity: 0.74;
 }
 
 .smart-section-label {
@@ -2990,7 +2975,6 @@ body::after {
 }
 
 .smart-title-input,
-.smart-edit-indicator,
 .smart-folder-option,
 .modal-input {
   border-radius: 6px;
