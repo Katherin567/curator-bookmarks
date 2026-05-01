@@ -5,6 +5,11 @@ import {
   AI_NAMING_DEFAULT_BATCH_SIZE
 } from './constants.js'
 import type { SavedSearch, SavedSearchIndex } from '../../shared/search-query.js'
+import {
+  DEFAULT_CONTENT_SNAPSHOT_SETTINGS,
+  type ContentSnapshotIndex,
+  type ContentSnapshotSettings
+} from '../../shared/content-snapshots.js'
 
 export function createEmptyIgnoreRules() {
   return {
@@ -175,6 +180,13 @@ export const dashboardState = {
   tagEditorSaving: false,
   tagEditorBusyAction: '',
   copyFeedbackId: '',
+  statusMessage: ''
+}
+
+export const contentSnapshotState = {
+  settings: { ...DEFAULT_CONTENT_SNAPSHOT_SETTINGS } as ContentSnapshotSettings,
+  index: { version: 1, updatedAt: 0, records: {} } as ContentSnapshotIndex,
+  searchTextMap: new Map<string, string>(),
   statusMessage: ''
 }
 

@@ -86,6 +86,12 @@ import {
   normalizePageContentContext
 } from './sections/content-extraction.js'
 import {
+  buildContentSnapshotSearchMapWithFullText,
+  normalizeContentSnapshotIndex,
+  normalizeContentSnapshotSettings,
+  saveContentSnapshotSettings
+} from '../shared/content-snapshots.js'
+import {
   SECTION_META,
   NAVIGATION_TIMEOUT_MS,
   NAVIGATION_RETRY_TIMEOUT_MS,
@@ -106,6 +112,7 @@ import {
   folderCleanupState,
   aiNamingState,
   aiNamingManagerState,
+  contentSnapshotState,
   backupRestoreState,
   createEmptyIgnoreRules,
   createEmptyRedirectCache
@@ -360,7 +367,9 @@ async function hydratePersistentState() {
       STORAGE_KEYS.recycleBin,
       STORAGE_KEYS.aiProviderSettings,
       STORAGE_KEYS.bookmarkTagIndex,
-      STORAGE_KEYS.folderCleanupState
+      STORAGE_KEYS.folderCleanupState,
+      STORAGE_KEYS.contentSnapshotSettings,
+      STORAGE_KEYS.contentSnapshotIndex
     ])
 
     managerState.ignoreRules = normalizeIgnoreRules(stored[STORAGE_KEYS.ignoreRules])
@@ -371,6 +380,12 @@ async function hydratePersistentState() {
     managerState.recycleBin = normalizeRecycleBin(stored[STORAGE_KEYS.recycleBin])
     aiNamingManagerState.settings = normalizeAiNamingSettings(stored[STORAGE_KEYS.aiProviderSettings])
     aiNamingState.tagIndex = normalizeBookmarkTagIndex(stored[STORAGE_KEYS.bookmarkTagIndex])
+    contentSnapshotState.settings = normalizeContentSnapshotSettings(stored[STORAGE_KEYS.contentSnapshotSettings])
+    contentSnapshotState.index = normalizeContentSnapshotIndex(stored[STORAGE_KEYS.contentSnapshotIndex])
+    contentSnapshotState.searchTextMap = await buildContentSnapshotSearchMapWithFullText(contentSnapshotState.index, {
+      includeFullText: contentSnapshotState.settings.fullTextSearchEnabled,
+      maxRecords: 1000
+    }).catch(() => new Map<string, string>())
     hydrateFolderCleanupState(stored[STORAGE_KEYS.folderCleanupState])
     void removeLocalStorage(LEGACY_AI_NAMING_CACHE_STORAGE_KEYS).catch(() => {})
   } catch (error) {
@@ -541,6 +556,18 @@ function bindEvents() {
   dom.aiAutoSelectHigh?.addEventListener('change', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
   dom.aiAllowRemoteParser?.addEventListener('change', handleAiRemoteParserChange)
   dom.aiAutoAnalyzeBookmarks?.addEventListener('change', handleAutoAnalyzeBookmarksChange)
+  dom.contentSnapshotEnabled?.addEventListener('change', () => {
+    void saveContentSnapshotSettingsFromDom()
+  })
+  dom.contentSnapshotFullText?.addEventListener('change', () => {
+    void saveContentSnapshotSettingsFromDom()
+  })
+  dom.contentSnapshotSearchFullText?.addEventListener('change', () => {
+    void saveContentSnapshotSettingsFromDom()
+  })
+  dom.contentSnapshotLocalOnly?.addEventListener('change', () => {
+    void saveContentSnapshotSettingsFromDom()
+  })
   dom.aiSystemPrompt?.addEventListener('input', () => syncAiNamingSettingsDraftFromDom({ markDirty: true }))
   dom.availabilityCopySummary?.addEventListener('click', handleAvailabilityCopySummary)
   dom.availabilityAction?.addEventListener('click', handleAvailabilityAction)
@@ -1941,6 +1968,58 @@ function syncAiNamingSettingsDraftFromDom({ markDirty = false } = {}) {
   return aiNamingManagerState.settings
 }
 
+async function saveContentSnapshotSettingsFromDom() {
+  const nextSettings = normalizeContentSnapshotSettings({
+    ...contentSnapshotState.settings,
+    enabled: Boolean(dom.contentSnapshotEnabled?.checked),
+    saveFullText: Boolean(dom.contentSnapshotFullText?.checked),
+    fullTextSearchEnabled: Boolean(dom.contentSnapshotSearchFullText?.checked),
+    localOnlyNoAiUpload: Boolean(dom.contentSnapshotLocalOnly?.checked)
+  })
+
+  try {
+    contentSnapshotState.settings = await saveContentSnapshotSettings(nextSettings)
+    contentSnapshotState.searchTextMap = await buildContentSnapshotSearchMapWithFullText(contentSnapshotState.index, {
+      includeFullText: contentSnapshotState.settings.fullTextSearchEnabled,
+      maxRecords: 1000
+    }).catch(() => new Map<string, string>())
+    contentSnapshotState.statusMessage = '网页快照设置已保存。'
+  } catch (error) {
+    contentSnapshotState.statusMessage =
+      error instanceof Error ? `网页快照设置保存失败：${error.message}` : '网页快照设置保存失败。'
+  } finally {
+    renderAiNamingSection()
+    renderDashboardSection()
+  }
+}
+
+function renderContentSnapshotSettings() {
+  const settings = contentSnapshotState.settings
+  const snapshotCount = Object.keys(contentSnapshotState.index.records || {}).length
+  if (dom.contentSnapshotEnabled) {
+    dom.contentSnapshotEnabled.checked = Boolean(settings.enabled)
+  }
+  if (dom.contentSnapshotFullText) {
+    dom.contentSnapshotFullText.checked = Boolean(settings.saveFullText)
+    dom.contentSnapshotFullText.disabled = !settings.enabled
+  }
+  if (dom.contentSnapshotSearchFullText) {
+    dom.contentSnapshotSearchFullText.checked = Boolean(settings.fullTextSearchEnabled)
+    dom.contentSnapshotSearchFullText.disabled = !settings.enabled || !settings.saveFullText
+  }
+  if (dom.contentSnapshotLocalOnly) {
+    dom.contentSnapshotLocalOnly.checked = Boolean(settings.localOnlyNoAiUpload)
+    dom.contentSnapshotLocalOnly.disabled = !settings.enabled
+  }
+  if (dom.contentSnapshotStatus) {
+    const fullTextCopy = settings.saveFullText
+      ? '已开启全文保存；超过 20KB 的单条全文写入 IndexedDB。'
+      : '全文未保存，仅使用摘要、标题和链接信息。'
+    dom.contentSnapshotStatus.textContent = contentSnapshotState.statusMessage ||
+      `已保存 ${snapshotCount} 条网页快照。${fullTextCopy}`
+  }
+}
+
 function resetAiNamingConnectivityState() {
   aiNamingState.testingConnection = false
   aiNamingState.lastConnectivityTestAt = 0
@@ -2531,6 +2610,7 @@ function renderAiNamingSection() {
     dom.aiAutoAnalyzeStatus.className = `options-chip ai-inline-status ${autoAnalyzeEnabled ? 'success' : 'muted'}`
     dom.aiAutoAnalyzeStatus.textContent = autoAnalyzeEnabled ? '自动分析开启' : '未开启'
   }
+  renderContentSnapshotSettings()
   if (dom.aiSystemPrompt && dom.aiSystemPrompt !== document.activeElement) {
     dom.aiSystemPrompt.value = settings.systemPrompt
   }
