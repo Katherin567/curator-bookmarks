@@ -565,37 +565,6 @@ button:focus-visible {
   transform-origin: right center;
 }
 
-.search-mode-chip {
-  flex: none;
-  max-width: 76px;
-  min-height: 22px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 7px;
-  border: 1px solid rgba(245, 245, 247, 0.18);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.045);
-  color: var(--text-faint);
-  font-size: 10px;
-  font-weight: 720;
-  line-height: 1;
-  letter-spacing: 0;
-  white-space: nowrap;
-}
-
-.search-mode-chip.ai {
-  border-color: rgba(201, 242, 210, 0.32);
-  background: rgba(201, 242, 210, 0.09);
-  color: #d6f6dc;
-}
-
-.search-mode-chip.local-natural {
-  border-color: rgba(245, 245, 247, 0.24);
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-soft);
-}
-
 .search-input {
   width: 100%;
   min-width: 0;

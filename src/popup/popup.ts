@@ -829,14 +829,10 @@ async function toggleNaturalLanguageSearch() {
   state.searchHighlightQuery = ''
   state.searchRunId += 1
   render()
-  void savePopupPreferences().catch(() => {
-    showToast({ type: 'error', message: '搜索模式偏好保存失败，当前会话仍已切换。' })
-  })
+  void savePopupPreferences().catch(() => {})
 
   if (enabled) {
     await prepareNaturalLanguageSearchAi()
-  } else {
-    showToast({ type: 'success', message: '已切回关键词搜索。' })
   }
 
   if (state.naturalSearchEnabled !== enabled) {
@@ -852,20 +848,8 @@ async function prepareNaturalLanguageSearchAi() {
     const settings = await loadAiProviderSettings()
     validateSmartAiSettings(settings)
     await ensureSmartClassifyPermissions(settings, { interactive: true })
-    showToast({ type: 'success', message: '自然语言搜索已开启，可使用 AI 理解查询。' })
-  } catch (error) {
+  } catch {
     state.naturalSearchError = 'AI 未就绪，当前使用本地自然语言解析。'
-    const detail = isSmartPermissionRequiredError(error)
-      ? '未完成 AI 渠道授权。'
-      : error instanceof Error
-        ? error.message
-        : ''
-    showToast({
-      type: 'error',
-      message: detail
-        ? `自然语言搜索已开启，本地解析生效：${detail}`
-        : '自然语言搜索已开启，本地解析生效。'
-    })
   }
 }
 
@@ -1100,21 +1084,18 @@ function renderBanner() {
   dom.errorBanner.textContent = state.loadError
   dom.errorBanner.classList.toggle('hidden', !state.loadError)
   dom.clearSearch.classList.toggle('hidden', !state.searchQuery)
-  const searchModeView = getSearchModeView(naturalSearchFallback, naturalSearchPending)
-  dom.searchModeChip.textContent = searchModeView.chip
-  dom.searchModeChip.className = `search-mode-chip ${searchModeView.className}`.trim()
-  dom.searchInput.placeholder = searchModeView.placeholder
-  dom.searchInput.setAttribute('aria-label', searchModeView.ariaLabel)
+  dom.searchInput.placeholder = getSearchInputPlaceholder()
+  dom.searchInput.setAttribute('aria-label', getSearchInputAriaLabel())
   dom.naturalSearchToggle.classList.toggle('active', state.naturalSearchEnabled)
   dom.naturalSearchToggle.classList.toggle('pending', naturalSearchPending)
   dom.naturalSearchToggle.classList.toggle('fallback', naturalSearchFallback)
-  dom.naturalSearchToggle.textContent = getNaturalSearchToggleText(naturalSearchFallback, naturalSearchPending)
+  dom.naturalSearchToggle.textContent = getNaturalSearchToggleText()
   dom.naturalSearchToggle.setAttribute('aria-pressed', String(state.naturalSearchEnabled))
   dom.naturalSearchToggle.setAttribute(
     'aria-label',
-    getNaturalSearchToggleAriaLabel(naturalSearchFallback, naturalSearchPending)
+    getNaturalSearchToggleAriaLabel(naturalSearchPending)
   )
-  dom.naturalSearchToggle.title = getNaturalSearchToggleTitle(naturalSearchFallback, naturalSearchPending)
+  dom.naturalSearchToggle.title = getNaturalSearchToggleTitle(naturalSearchPending)
   renderSearchTools()
 }
 
@@ -1129,40 +1110,14 @@ function renderSearchTools() {
     .join('')
 }
 
-function getSearchModeView(isFallback: boolean, isPending: boolean) {
-  if (!state.naturalSearchEnabled) {
-    return {
-      chip: '本地',
-      className: '',
-      placeholder: '',
-      ariaLabel: '本地搜索书签标题、网址、标签或高级语法'
-    }
-  }
+function getSearchInputPlaceholder() {
+  return state.naturalSearchEnabled ? '自然语言搜索' : '关键词搜索'
+}
 
-  if (isPending) {
-    return {
-      chip: '理解中',
-      className: 'ai',
-      placeholder: '',
-      ariaLabel: '自然语言搜索正在使用 AI 改写查询'
-    }
-  }
-
-  if (isFallback) {
-    return {
-      chip: '本地NL',
-      className: 'local-natural',
-      placeholder: '',
-      ariaLabel: '本地自然语言筛选书签'
-    }
-  }
-
-  return {
-    chip: 'AI改写',
-    className: 'ai',
-    placeholder: '',
-    ariaLabel: '使用 AI 改写的自然语言搜索'
-  }
+function getSearchInputAriaLabel() {
+  return state.naturalSearchEnabled
+    ? '自然语言搜索书签'
+    : '关键词搜索书签标题、网址、标签或高级语法'
 }
 
 function isNaturalSearchLocalFallback() {
@@ -1175,19 +1130,11 @@ function isNaturalSearchLocalFallback() {
   )
 }
 
-function getNaturalSearchToggleText(isFallback: boolean, isPending: boolean) {
-  if (!state.naturalSearchEnabled) {
-    return 'AI'
-  }
-
-  if (isPending) {
-    return '...'
-  }
-
-  return isFallback ? '本地' : 'AI'
+function getNaturalSearchToggleText() {
+  return '自然'
 }
 
-function getNaturalSearchToggleAriaLabel(isFallback: boolean, isPending: boolean) {
+function getNaturalSearchToggleAriaLabel(isPending: boolean) {
   if (!state.naturalSearchEnabled) {
     return '开启自然语言搜索'
   }
@@ -1196,14 +1143,10 @@ function getNaturalSearchToggleAriaLabel(isFallback: boolean, isPending: boolean
     return '自然语言搜索正在解析，点击可关闭'
   }
 
-  if (isFallback) {
-    return '关闭自然语言搜索，当前使用本地解析'
-  }
-
-  return '关闭自然语言搜索，当前可使用 AI 解析'
+  return '关闭自然语言搜索'
 }
 
-function getNaturalSearchToggleTitle(isFallback: boolean, isPending: boolean) {
+function getNaturalSearchToggleTitle(isPending: boolean) {
   if (!state.naturalSearchEnabled) {
     return '开启自然语言搜索'
   }
@@ -1212,11 +1155,7 @@ function getNaturalSearchToggleTitle(isFallback: boolean, isPending: boolean) {
     return '正在理解搜索意图，点击可关闭'
   }
 
-  if (isFallback) {
-    return state.naturalSearchError || '当前使用本地自然语言解析，点击关闭'
-  }
-
-  return '自然语言搜索已开启，点击关闭'
+  return '关闭自然语言搜索'
 }
 
 function renderToolbar() {
