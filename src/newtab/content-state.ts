@@ -21,6 +21,40 @@ export interface NewTabPageOptions {
   modules: NewTabPageModule[]
 }
 
+export interface NewTabSearchIndexBookmark {
+  id: string
+  title?: string
+  url?: string
+}
+
+export interface NewTabSearchIndexSection {
+  title: string
+  path: string
+  bookmarks: NewTabSearchIndexBookmark[]
+}
+
+export interface NewTabSearchIndexEntry {
+  id: string
+  title: string
+  url: string
+  folderTitle: string
+  folderPath: string
+  normalizedTitle: string
+  normalizedUrl: string
+  normalizedFolderTitle: string
+  order: number
+}
+
+export interface SearchBookmarkSuggestion {
+  id: string
+  title: string
+  url: string
+  folderTitle: string
+  folderPath: string
+  score: number
+  order: number
+}
+
 export interface MissingFolderViewOptions {
   creatingFolder: boolean
   reason: 'none-selected' | 'selected-unavailable'
@@ -47,6 +81,112 @@ export function resolveNewTabContentState(
   }
 
   return { type: 'bookmarks' }
+}
+
+export function buildNewTabSearchIndex(
+  sections: NewTabSearchIndexSection[]
+): NewTabSearchIndexEntry[] {
+  const entries: NewTabSearchIndexEntry[] = []
+  let order = 0
+
+  for (const section of sections) {
+    const folderTitle = section.title || '未命名文件夹'
+    const folderPath = section.path || section.title || ''
+    const normalizedFolderTitle = normalizeNewTabSearchText(folderTitle)
+
+    for (const bookmark of section.bookmarks) {
+      const url = String(bookmark.url || '').trim()
+      if (!url) {
+        continue
+      }
+
+      const title = String(bookmark.title || '').trim() || url
+      entries.push({
+        id: String(bookmark.id),
+        title,
+        url,
+        folderTitle,
+        folderPath,
+        normalizedTitle: normalizeNewTabSearchText(title),
+        normalizedUrl: normalizeNewTabSearchText(url),
+        normalizedFolderTitle,
+        order
+      })
+      order += 1
+    }
+  }
+
+  return entries
+}
+
+export function getSearchBookmarkSuggestionsFromIndex(
+  query: string,
+  index: NewTabSearchIndexEntry[],
+  limit: number
+): SearchBookmarkSuggestion[] {
+  const normalizedQuery = normalizeNewTabSearchText(query)
+  if (!normalizedQuery || limit <= 0) {
+    return []
+  }
+
+  const suggestions: SearchBookmarkSuggestion[] = []
+  for (const entry of index) {
+    const score = getSearchSuggestionScore(
+      normalizedQuery,
+      entry.normalizedTitle,
+      entry.normalizedUrl,
+      entry.normalizedFolderTitle
+    )
+    if (score < 0) {
+      continue
+    }
+
+    suggestions.push({
+      id: entry.id,
+      title: entry.title,
+      url: entry.url,
+      folderTitle: entry.folderTitle,
+      folderPath: entry.folderPath,
+      score,
+      order: entry.order
+    })
+  }
+
+  return suggestions
+    .sort((left, right) => left.score - right.score || left.order - right.order)
+    .slice(0, limit)
+}
+
+export function normalizeNewTabSearchText(value: string): string {
+  return String(value || '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function getSearchSuggestionScore(
+  query: string,
+  title: string,
+  url: string,
+  folderTitle: string
+): number {
+  if (title === query) {
+    return 0
+  }
+  if (title.startsWith(query)) {
+    return 1
+  }
+  if (title.includes(query)) {
+    return 2
+  }
+  if (url.includes(query)) {
+    return 3
+  }
+  if (folderTitle.includes(query)) {
+    return 4
+  }
+  return -1
 }
 
 export function createNewTabPage({ modules }: NewTabPageOptions): HTMLElement {

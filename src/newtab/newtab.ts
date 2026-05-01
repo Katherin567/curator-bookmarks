@@ -11,12 +11,11 @@ import {
 } from '../shared/bookmarks-api.js'
 import {
   extractBookmarkData,
-  findBookmarksBar,
-  findNodeById
+  findBookmarksBar
 } from '../shared/bookmark-tree.js'
 import { appendRecycleEntry } from '../shared/recycle-bin.js'
 import { getLocalStorage, setLocalStorage } from '../shared/storage.js'
-import type { FolderRecord } from '../shared/types.js'
+import type { ExtractedBookmarkData, FolderRecord } from '../shared/types.js'
 import { cancelExitMotion, closeWithExitMotion } from '../shared/motion.js'
 import {
   DEFAULT_ICON_SETTINGS,
@@ -33,11 +32,15 @@ import {
   normalizeIconSettings
 } from './icon-settings.js'
 import {
+  buildNewTabSearchIndex,
   createMissingFolderView,
   createNewTabPage,
   createStateView,
+  getSearchBookmarkSuggestionsFromIndex,
   resolveNewTabContentState,
-  type NewTabPageModule
+  type NewTabPageModule,
+  type NewTabSearchIndexEntry,
+  type SearchBookmarkSuggestion
 } from './content-state.js'
 
 const DEFAULT_NEW_TAB_FOLDER_TITLE = '标签页'
@@ -143,16 +146,6 @@ interface NewTabFolderSection {
   bookmarks: chrome.bookmarks.BookmarkTreeNode[]
 }
 
-interface SearchBookmarkSuggestion {
-  id: string
-  title: string
-  url: string
-  folderTitle: string
-  folderPath: string
-  score: number
-  order: number
-}
-
 interface NewTabActivityRecord {
   bookmarkId: string
   title: string
@@ -183,9 +176,13 @@ const state = {
   creatingFolder: false,
   error: '',
   rootNode: null as chrome.bookmarks.BookmarkTreeNode | null,
+  folderData: null as ExtractedBookmarkData | null,
+  folderNodeMap: new Map<string, chrome.bookmarks.BookmarkTreeNode>(),
   folderNode: null as chrome.bookmarks.BookmarkTreeNode | null,
   folderSections: [] as NewTabFolderSection[],
   bookmarks: [] as chrome.bookmarks.BookmarkTreeNode[],
+  bookmarkMap: new Map<string, chrome.bookmarks.BookmarkTreeNode>(),
+  searchIndex: [] as NewTabSearchIndexEntry[],
   activeMenuBookmarkId: '',
   menuX: 0,
   menuY: 0,
@@ -680,8 +677,7 @@ async function updateSelectedFolders(
     selectedFolderIds: folderIds
   })
   state.folderSections = buildNewTabFolderSections(state.rootNode, state.folderSettings)
-  state.folderNode = state.folderSections[0]?.node || null
-  state.bookmarks = getAllSectionBookmarks()
+  refreshDerivedBookmarkState()
 
   await saveFolderSettings()
   render()
@@ -1316,7 +1312,7 @@ function setActiveBookmarkFolderBookmarks(bookmarks: chrome.bookmarks.BookmarkTr
   }
 
   section.bookmarks = bookmarks
-  state.bookmarks = getAllSectionBookmarks()
+  refreshDerivedBookmarkState()
 }
 
 function getBookmarkTileRects(): Map<string, DOMRect> {
@@ -1780,8 +1776,7 @@ function moveDraggedFolderInState(insertIndex: number): boolean {
 
   nextSections.splice(normalizedIndex, 0, draggedSection)
   state.folderSections = nextSections
-  state.folderNode = state.folderSections[0]?.node || null
-  state.bookmarks = getAllSectionBookmarks()
+  refreshDerivedBookmarkState()
   return true
 }
 
@@ -2041,17 +2036,20 @@ async function refreshNewTab(): Promise<void> {
       ])
     ])
     const rootNode = tree[0] || null
+    const folderData = extractBookmarkData(rootNode)
+    const folderNodeMap = buildFolderNodeMap(rootNode)
     const folderSettings = normalizeFolderSettingsWithDefault(
       stored[STORAGE_KEYS.newTabFolderSettings],
       rootNode
     )
-    const folderSections = buildNewTabFolderSections(rootNode, folderSettings)
+    const folderSections = buildNewTabFolderSections(rootNode, folderSettings, folderData, folderNodeMap)
 
     state.rootNode = rootNode
+    state.folderData = folderData
+    state.folderNodeMap = folderNodeMap
     state.folderSettings = folderSettings
     state.folderSections = folderSections
-    state.folderNode = folderSections[0]?.node || null
-    state.bookmarks = getAllSectionBookmarks()
+    refreshDerivedBookmarkState()
     state.customIcons = normalizeCustomIcons(stored[STORAGE_KEYS.newTabCustomIcons])
     state.activity = normalizeNewTabActivity(stored[NEW_TAB_ACTIVITY_STORAGE_KEY], state.bookmarks)
     state.backgroundSettings = normalizeBackgroundSettings(stored[STORAGE_KEYS.newTabBackgroundSettings])
@@ -2135,8 +2133,7 @@ async function ensureNewTabFolder(): Promise<string> {
       selectedFolderIds: [String(existingFolder.id)]
     })
     state.folderSections = buildNewTabFolderSections(rootNode, state.folderSettings)
-    state.folderNode = state.folderSections[0]?.node || existingFolder
-    state.bookmarks = getAllSectionBookmarks()
+    refreshDerivedBookmarkState()
     await saveFolderSettings()
     return String(existingFolder.id)
   }
@@ -2151,8 +2148,7 @@ async function ensureNewTabFolder(): Promise<string> {
     selectedFolderIds: [String(createdFolder.id)]
   })
   state.folderSections = buildNewTabFolderSections(rootNode, state.folderSettings)
-  state.folderNode = state.folderSections[0]?.node || createdFolder
-  state.bookmarks = getAllSectionBookmarks()
+  refreshDerivedBookmarkState()
   await saveFolderSettings()
   return String(createdFolder.id)
 }
@@ -2488,48 +2484,11 @@ function syncSearchInputActions(
 }
 
 function getSearchBookmarkSuggestions(query: string): SearchBookmarkSuggestion[] {
-  const normalizedQuery = normalizeBookmarkSuggestionText(query)
-  if (!normalizedQuery) {
-    return []
-  }
-
-  const suggestions: SearchBookmarkSuggestion[] = []
-  let order = 0
-  for (const section of state.folderSections) {
-    for (const bookmark of section.bookmarks) {
-      const url = String(bookmark.url || '').trim()
-      if (!url) {
-        continue
-      }
-
-      const title = String(bookmark.title || '').trim() || url
-      const score = getSearchSuggestionScore(
-        normalizedQuery,
-        normalizeBookmarkSuggestionText(title),
-        normalizeBookmarkSuggestionText(url),
-        normalizeBookmarkSuggestionText(section.title)
-      )
-      if (score < 0) {
-        order += 1
-        continue
-      }
-
-      suggestions.push({
-        id: String(bookmark.id),
-        title,
-        url,
-        folderTitle: section.title || '未命名文件夹',
-        folderPath: section.path || section.title || '',
-        score,
-        order
-      })
-      order += 1
-    }
-  }
-
-  return suggestions
-    .sort((left, right) => left.score - right.score || left.order - right.order)
-    .slice(0, SEARCH_SUGGESTION_LIMIT)
+  return getSearchBookmarkSuggestionsFromIndex(
+    query,
+    state.searchIndex,
+    SEARCH_SUGGESTION_LIMIT
+  )
 }
 
 function getSearchEnterHint(suggestion: SearchBookmarkSuggestion | undefined): string {
@@ -2538,38 +2497,6 @@ function getSearchEnterHint(suggestion: SearchBookmarkSuggestion | undefined): s
   }
 
   return `Enter 打开「${suggestion.title}」；搜索图标搜索网页`
-}
-
-function getSearchSuggestionScore(
-  query: string,
-  title: string,
-  url: string,
-  folderTitle: string
-): number {
-  if (title === query) {
-    return 0
-  }
-  if (title.startsWith(query)) {
-    return 1
-  }
-  if (title.includes(query)) {
-    return 2
-  }
-  if (url.includes(query)) {
-    return 3
-  }
-  if (folderTitle.includes(query)) {
-    return 4
-  }
-  return -1
-}
-
-function normalizeBookmarkSuggestionText(value: string): string {
-  return String(value || '')
-    .normalize('NFKC')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim()
 }
 
 function createSearchSuggestionButton(
@@ -2857,12 +2784,11 @@ function createQuickAccessLink(item: QuickAccessItem): HTMLAnchorElement {
 }
 
 function getFrequentQuickAccessItems(): QuickAccessItem[] {
-  const bookmarkMap = getBookmarkNodeMap()
   const items: QuickAccessItem[] = []
   const usedIds = new Set<string>()
 
   for (const bookmarkId of state.activity.pinnedIds) {
-    const bookmark = bookmarkMap.get(bookmarkId)
+    const bookmark = state.bookmarkMap.get(bookmarkId)
     if (!bookmark?.url || usedIds.has(bookmarkId)) {
       continue
     }
@@ -2883,7 +2809,7 @@ function getFrequentQuickAccessItems(): QuickAccessItem[] {
     )
 
   for (const record of frequentRecords) {
-    const bookmark = bookmarkMap.get(record.bookmarkId)
+    const bookmark = state.bookmarkMap.get(record.bookmarkId)
     if (!bookmark?.url) {
       continue
     }
@@ -2899,7 +2825,6 @@ function getFrequentQuickAccessItems(): QuickAccessItem[] {
 }
 
 function getRecentQuickAccessItems(excludedIds: Set<string>): QuickAccessItem[] {
-  const bookmarkMap = getBookmarkNodeMap()
   const items: QuickAccessItem[] = []
   const usedIds = new Set(excludedIds)
 
@@ -2908,7 +2833,7 @@ function getRecentQuickAccessItems(excludedIds: Set<string>): QuickAccessItem[] 
     .sort((left, right) => right.lastOpenedAt - left.lastOpenedAt)
 
   for (const record of recentlyOpened) {
-    const bookmark = bookmarkMap.get(record.bookmarkId)
+    const bookmark = state.bookmarkMap.get(record.bookmarkId)
     if (!bookmark?.url) {
       continue
     }
@@ -2920,15 +2845,7 @@ function getRecentQuickAccessItems(excludedIds: Set<string>): QuickAccessItem[] 
     }
   }
 
-  const recentlyAdded = state.bookmarks
-    .filter((bookmark) => Number.isFinite(Number(bookmark.dateAdded)) && !usedIds.has(String(bookmark.id)))
-    .sort((left, right) => Number(right.dateAdded || 0) - Number(left.dateAdded || 0))
-
-  for (const bookmark of recentlyAdded) {
-    if (!bookmark.url) {
-      continue
-    }
-
+  for (const bookmark of getRecentAddedBookmarks(usedIds, QUICK_ACCESS_ITEM_LIMIT - items.length)) {
     items.push(createQuickAccessItem(bookmark, formatRelativeActivityTime(Number(bookmark.dateAdded), '添加'), '新'))
     usedIds.add(String(bookmark.id))
     if (items.length >= QUICK_ACCESS_ITEM_LIMIT) {
@@ -2937,6 +2854,51 @@ function getRecentQuickAccessItems(excludedIds: Set<string>): QuickAccessItem[] 
   }
 
   return items
+}
+
+function getRecentAddedBookmarks(
+  excludedIds: Set<string>,
+  limit: number
+): chrome.bookmarks.BookmarkTreeNode[] {
+  if (limit <= 0) {
+    return []
+  }
+
+  const recentBookmarks: chrome.bookmarks.BookmarkTreeNode[] = []
+  for (const bookmark of state.bookmarks) {
+    const bookmarkId = String(bookmark.id)
+    if (
+      !bookmark.url ||
+      excludedIds.has(bookmarkId) ||
+      !Number.isFinite(Number(bookmark.dateAdded))
+    ) {
+      continue
+    }
+
+    insertRecentAddedBookmark(recentBookmarks, bookmark, limit)
+  }
+
+  return recentBookmarks
+}
+
+function insertRecentAddedBookmark(
+  bookmarks: chrome.bookmarks.BookmarkTreeNode[],
+  bookmark: chrome.bookmarks.BookmarkTreeNode,
+  limit: number
+): void {
+  const timestamp = Number(bookmark.dateAdded || 0)
+  const insertIndex = bookmarks.findIndex((item) => Number(item.dateAdded || 0) < timestamp)
+  if (insertIndex < 0) {
+    if (bookmarks.length < limit) {
+      bookmarks.push(bookmark)
+    }
+    return
+  }
+
+  bookmarks.splice(insertIndex, 0, bookmark)
+  if (bookmarks.length > limit) {
+    bookmarks.length = limit
+  }
 }
 
 function createQuickAccessItem(
@@ -2954,10 +2916,6 @@ function createQuickAccessItem(
     badge,
     bookmark
   }
-}
-
-function getBookmarkNodeMap(): Map<string, chrome.bookmarks.BookmarkTreeNode> {
-  return new Map(state.bookmarks.map((bookmark) => [String(bookmark.id), bookmark]))
 }
 
 function formatRelativeActivityTime(timestamp: number, label: string): string {
@@ -3140,25 +3098,51 @@ function findNewTabFolder(
   return candidates[0]?.node || null
 }
 
+function buildFolderNodeMap(
+  rootNode: chrome.bookmarks.BookmarkTreeNode | null
+): Map<string, chrome.bookmarks.BookmarkTreeNode> {
+  const map = new Map<string, chrome.bookmarks.BookmarkTreeNode>()
+  if (!rootNode) {
+    return map
+  }
+
+  const walk = (node: chrome.bookmarks.BookmarkTreeNode): void => {
+    if (!node.url) {
+      map.set(String(node.id), node)
+      for (const child of node.children || []) {
+        if (!child.url) {
+          walk(child)
+        }
+      }
+    }
+  }
+
+  walk(rootNode)
+  return map
+}
+
 function buildNewTabFolderSections(
   rootNode: chrome.bookmarks.BookmarkTreeNode | null,
-  settings: NewTabFolderSettings
+  settings: NewTabFolderSettings,
+  folderData = state.folderData,
+  folderNodeMap = state.folderNodeMap
 ): NewTabFolderSection[] {
   if (!rootNode) {
     return []
   }
 
-  const folderData = extractBookmarkData(rootNode)
+  const resolvedFolderData = folderData || extractBookmarkData(rootNode)
+  const resolvedFolderNodeMap = folderNodeMap.size ? folderNodeMap : buildFolderNodeMap(rootNode)
   const selectedIds = normalizeFolderIds(settings.selectedFolderIds)
   const sections: NewTabFolderSection[] = []
 
   for (const folderId of selectedIds) {
-    const node = findNodeById(rootNode, folderId)
+    const node = resolvedFolderNodeMap.get(folderId) || null
     if (!node || node.url) {
       continue
     }
 
-    const folder = folderData.folderMap.get(folderId)
+    const folder = resolvedFolderData.folderMap.get(folderId)
     sections.push(createFolderSection(node, folder))
   }
 
@@ -3189,8 +3173,15 @@ function getAllSectionBookmarks(): chrome.bookmarks.BookmarkTreeNode[] {
   return state.folderSections.flatMap((section) => section.bookmarks)
 }
 
+function refreshDerivedBookmarkState(): void {
+  state.folderNode = state.folderSections[0]?.node || null
+  state.bookmarks = getAllSectionBookmarks()
+  state.bookmarkMap = new Map(state.bookmarks.map((bookmark) => [String(bookmark.id), bookmark]))
+  state.searchIndex = buildNewTabSearchIndex(state.folderSections)
+}
+
 function getBookmarkById(bookmarkId: string): chrome.bookmarks.BookmarkTreeNode | null {
-  return state.bookmarks.find((bookmark) => String(bookmark.id) === String(bookmarkId)) || null
+  return state.bookmarkMap.get(String(bookmarkId)) || null
 }
 
 function getBookmarkFolderPath(bookmark: chrome.bookmarks.BookmarkTreeNode): string {
@@ -4837,15 +4828,11 @@ function getFolderCandidates(): FolderRecord[] {
     return []
   }
 
-  return extractBookmarkData(state.rootNode).folders
+  return state.folderData?.folders || extractBookmarkData(state.rootNode).folders
 }
 
 function getFolderCandidateMap(): Map<string, FolderRecord> {
-  const map = new Map<string, FolderRecord>()
-  for (const folder of getFolderCandidates()) {
-    map.set(folder.id, folder)
-  }
-  return map
+  return state.folderData?.folderMap || new Map(getFolderCandidates().map((folder) => [folder.id, folder]))
 }
 
 function normalizeSettingSearchText(value: string): string {
