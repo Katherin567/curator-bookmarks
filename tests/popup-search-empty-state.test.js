@@ -25,3 +25,10 @@ test('popup empty search state offers actionable recovery controls', () => {
   assert.match(popupSource, /data-empty-action="toggle-natural"/)
   assert.match(popupSource, /handleEmptySearchAction/)
 })
+
+test('popup folder pickers expose option and treeitem semantics', () => {
+  assert.match(popupSource, /class="filter-option \$\{isSelected \? 'selected' : ''\}"[\s\S]*?role="option"[\s\S]*?aria-selected="\$\{isSelected \? 'true' : 'false'\}"/)
+  assert.match(popupSource, /data-toggle-move-folder="\$\{escapeAttr\(node\.id\)\}"[\s\S]*?role="treeitem"[\s\S]*?aria-level="\$\{depth \+ 1\}"[\s\S]*?aria-expanded="\$\{childFolders\.length \? String\(isExpanded\) : 'false'\}"/)
+  assert.match(popupSource, /role="treeitem"[\s\S]*?aria-level="\$\{depth \+ 1\}"[\s\S]*?aria-selected="\$\{isCurrentFolder \? 'true' : 'false'\}"[\s\S]*?data-select-folder="\$\{escapeAttr\(node\.id\)\}"/)
+  assert.match(popupSource, /role="treeitem"[\s\S]*?aria-level="\$\{depth \+ 1\}"[\s\S]*?aria-selected="false"[\s\S]*?data-smart-select-folder="\$\{escapeAttr\(node\.id\)\}"/)
+})

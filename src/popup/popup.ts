@@ -2111,6 +2111,8 @@ function renderFilterFolderList() {
         <button
           class="filter-option ${isSelected ? 'selected' : ''}"
           type="button"
+          role="option"
+          aria-selected="${isSelected ? 'true' : 'false'}"
           data-select-filter-folder="${escapeAttr(folder.id)}"
           title="${escapeAttr(folder.path)}"
         >
@@ -2193,11 +2195,17 @@ function renderSmartFolderNode(node, depth, query) {
         type="button"
         ${childFolders.length ? '' : 'data-disabled="true"'}
         data-toggle-smart-folder="${escapeAttr(node.id)}"
+        role="treeitem"
+        aria-level="${depth + 1}"
+        aria-expanded="${childFolders.length ? String(isExpanded) : 'false'}"
         aria-label="${isExpanded ? '折叠文件夹' : '展开文件夹'}"
       ></button>
       <button
         class="picker-folder-card"
         type="button"
+        role="treeitem"
+        aria-level="${depth + 1}"
+        aria-selected="false"
         data-smart-select-folder="${escapeAttr(node.id)}"
         ${saving ? 'disabled' : ''}
       >
@@ -2248,11 +2256,17 @@ function renderMoveFolderNode(node, depth, query, bookmark) {
         type="button"
         ${childFolders.length ? '' : 'data-disabled="true"'}
         data-toggle-move-folder="${escapeAttr(node.id)}"
+        role="treeitem"
+        aria-level="${depth + 1}"
+        aria-expanded="${childFolders.length ? String(isExpanded) : 'false'}"
         aria-label="${isExpanded ? '折叠文件夹' : '展开文件夹'}"
       ></button>
       <button
         class="picker-folder-card"
         type="button"
+        role="treeitem"
+        aria-level="${depth + 1}"
+        aria-selected="${isCurrentFolder ? 'true' : 'false'}"
         data-select-folder="${escapeAttr(node.id)}"
         ${moving ? 'disabled' : ''}
       >
