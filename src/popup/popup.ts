@@ -235,6 +235,7 @@ function bindEvents() {
   dom.openInboxFilter.addEventListener('click', applyInboxFolderFilter)
 
   dom.content.addEventListener('click', handleContentClick)
+  dom.emptyState.addEventListener('click', handleContentClick)
   dom.content.addEventListener('pointerover', handleContentPointerOver)
   dom.filterFolderList.addEventListener('click', handleFilterListClick)
   dom.filterSearchInput.addEventListener('input', () => {
@@ -305,10 +306,11 @@ async function savePopupPreferences() {
   })
 }
 
-async function openSettingsPage() {
+async function openSettingsPage(target: Event | 'general' | 'ai-provider' = 'general') {
+  const hash = target === 'ai-provider' ? 'general:ai-provider' : 'general'
   try {
     await chrome.tabs.create({
-      url: chrome.runtime.getURL('src/options/options.html#general')
+      url: chrome.runtime.getURL(`src/options/options.html#${hash}`)
     })
     window.close()
   } catch (error) {
@@ -843,6 +845,7 @@ function getActiveTab(): Promise<chrome.tabs.Tab | null> {
 
 function setSearchQuery(value, { immediate = false } = {}) {
   state.searchQuery = value
+  state.naturalSearchSetupRequired = false
   state.activeMenuBookmarkId = null
   clearViewNotice()
 
@@ -871,7 +874,26 @@ function setSearchQuery(value, { immediate = false } = {}) {
 
 async function toggleNaturalLanguageSearch() {
   const enabled = !state.naturalSearchEnabled
+
+  if (enabled) {
+    const settings = await loadAiProviderSettings()
+    if (!hasConfiguredAiProviderSettings(settings)) {
+      state.naturalSearchEnabled = false
+      state.naturalSearchSetupRequired = true
+      state.naturalSearchPending = false
+      state.naturalSearchError = ''
+      state.naturalSearchPlan = null
+      state.searchHighlightQuery = ''
+      state.searchRunId += 1
+      state.searchPending = false
+      render()
+      void savePopupPreferences().catch(() => {})
+      return
+    }
+  }
+
   state.naturalSearchEnabled = enabled
+  state.naturalSearchSetupRequired = false
   state.naturalSearchPending = false
   state.naturalSearchError = ''
   state.naturalSearchPlan = null
@@ -908,6 +930,7 @@ function runSearch() {
   const runId = state.searchRunId + 1
   state.searchRunId = runId
   state.searchHighlightQuery = normalizedQuery
+  state.naturalSearchSetupRequired = false
   state.naturalSearchError = ''
 
   if (!normalizedQuery) {
@@ -1623,6 +1646,11 @@ function renderSmartRecommendation(recommendation, selectedId) {
 
 function renderMainContent() {
   const hasQuery = Boolean(state.debouncedQuery)
+  const showNaturalSearchSetup =
+    state.naturalSearchSetupRequired &&
+    !state.isLoading &&
+    !state.searchPending &&
+    !state.naturalSearchPending
   const showSearchLoading =
     hasQuery &&
     state.searchPending &&
@@ -1640,10 +1668,15 @@ function renderMainContent() {
     (!currentRoot || !(currentRoot.children || []).length)
 
   dom.loadingState.classList.toggle('hidden', !(state.isLoading || showSearchLoading))
-  dom.content.classList.toggle('hidden', state.isLoading || showSearchLoading || showEmptySearch || showEmptyTree)
-  dom.emptyState.classList.toggle('hidden', !(showEmptySearch || showEmptyTree))
+  dom.content.classList.toggle(
+    'hidden',
+    state.isLoading || showSearchLoading || showNaturalSearchSetup || showEmptySearch || showEmptyTree
+  )
+  dom.emptyState.classList.toggle('hidden', !(showNaturalSearchSetup || showEmptySearch || showEmptyTree))
 
-  if (showEmptySearch) {
+  if (showNaturalSearchSetup) {
+    dom.emptyState.innerHTML = renderNaturalSearchSetupState()
+  } else if (showEmptySearch) {
     dom.emptyState.innerHTML = renderEmptySearchState()
   } else if (showEmptyTree) {
     dom.emptyState.textContent = state.selectedFolderFilterId
@@ -1667,6 +1700,19 @@ function renderMainContent() {
     preserveScroll: !hasQuery
   })
   updateActiveResultVisibility()
+}
+
+function renderNaturalSearchSetupState() {
+  return `
+    <div class="empty-search-state natural-search-setup-state">
+      <p class="empty-title">需要配置 AI 渠道</p>
+      <p class="empty-hint">语义搜索需要先配置自定义 AI 渠道。配置完成后，再回到这里点击“语义”。</p>
+      <div class="empty-actions">
+        <button class="empty-action primary" type="button" data-empty-action="open-ai-settings">配置 AI 渠道</button>
+        <button class="empty-action" type="button" data-empty-action="dismiss-natural-setup">继续关键词搜索</button>
+      </div>
+    </div>
+  `
 }
 
 function renderEmptySearchState() {
@@ -2455,6 +2501,17 @@ function handleEmptySearchAction(action) {
   if (action === 'toggle-natural') {
     void toggleNaturalLanguageSearch()
     return
+  }
+
+  if (action === 'open-ai-settings') {
+    void openSettingsPage('ai-provider')
+    return
+  }
+
+  if (action === 'dismiss-natural-setup') {
+    state.naturalSearchSetupRequired = false
+    render()
+    dom.searchInput.focus()
   }
 }
 
@@ -3675,6 +3732,10 @@ function validateSmartAiSettings(settings) {
   if (!settings.baseUrl || !settings.apiKey || !settings.model) {
     throw new Error('请先到通用设置配置“自定义AI渠道”。')
   }
+}
+
+function hasConfiguredAiProviderSettings(settings) {
+  return Boolean(settings.baseUrl && settings.apiKey && settings.model)
 }
 
 async function ensureSmartClassifyPermissions(settings, { interactive = false } = {}) {

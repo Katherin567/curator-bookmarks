@@ -456,6 +456,8 @@ function syncPageSection() {
   if (key === 'general') {
     renderAiNamingSection()
   }
+
+  scrollToSectionAnchor()
 }
 
 function handleSectionNavigationClick(event) {
@@ -484,6 +486,10 @@ function handleSectionNavigationClick(event) {
 }
 
 function resetOptionsScrollPosition() {
+  if (getCurrentSectionAnchor()) {
+    return
+  }
+
   const reset = () => {
     window.scrollTo(0, 0)
     document.documentElement.scrollTop = 0
@@ -496,6 +502,27 @@ function resetOptionsScrollPosition() {
     window.requestAnimationFrame(reset)
   })
   window.setTimeout(reset, 0)
+}
+
+function scrollToSectionAnchor() {
+  if (normalizeSectionKey(getCurrentSectionKey()) !== 'general') {
+    return
+  }
+
+  if (getCurrentSectionAnchor() !== 'ai-provider') {
+    return
+  }
+
+  const target = document.getElementById('ai-provider-settings')
+  if (!target) {
+    return
+  }
+
+  window.requestAnimationFrame(() => {
+    target.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    target.classList.add('attention')
+    window.setTimeout(() => target.classList.remove('attention'), 1400)
+  })
 }
 
 
@@ -739,7 +766,12 @@ function bindEvents() {
 }
 
 function getCurrentSectionKey() {
-  return window.location.hash.replace(/^#/, '') || 'general'
+  return window.location.hash.replace(/^#/, '').split(':')[0] || 'general'
+}
+
+function getCurrentSectionAnchor() {
+  const [, anchor = ''] = window.location.hash.replace(/^#/, '').split(':')
+  return anchor
 }
 
 function normalizeSectionKey(key: string): keyof typeof SECTION_META {

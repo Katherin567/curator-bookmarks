@@ -77,6 +77,7 @@ export interface PopupState {
   searchSnapshotFullTextPending: boolean
   searchSnapshotFullTextRunId: number
   naturalSearchEnabled: boolean
+  naturalSearchSetupRequired: boolean
   naturalSearchPending: boolean
   naturalSearchError: string
   naturalSearchPlan: NaturalSearchPlan | null
@@ -156,6 +157,7 @@ export const state: PopupState = {
   searchSnapshotFullTextPending: false,
   searchSnapshotFullTextRunId: 0,
   naturalSearchEnabled: false,
+  naturalSearchSetupRequired: false,
   naturalSearchPending: false,
   naturalSearchError: '',
   naturalSearchPlan: null,

@@ -23,7 +23,19 @@ test('popup empty search state offers actionable recovery controls', () => {
   assert.match(popupSource, /data-empty-action="clear-filter"/)
   assert.match(popupSource, /data-empty-action="show-all"/)
   assert.match(popupSource, /data-empty-action="toggle-natural"/)
+  assert.match(popupSource, /dom\.emptyState\.addEventListener\('click', handleContentClick\)/)
   assert.match(popupSource, /handleEmptySearchAction/)
+})
+
+test('popup natural search asks for AI channel setup before enabling semantic mode', () => {
+  assert.match(popupSource, /naturalSearchSetupRequired/)
+  assert.match(popupSource, /function renderNaturalSearchSetupState/)
+  assert.match(popupSource, /需要配置 AI 渠道/)
+  assert.match(popupSource, /data-empty-action="open-ai-settings"/)
+  assert.match(popupSource, /配置 AI 渠道/)
+  assert.match(popupSource, /function hasConfiguredAiProviderSettings/)
+  assert.match(popupSource, /if \(!hasConfiguredAiProviderSettings\(settings\)\)/)
+  assert.match(popupSource, /openSettingsPage\('ai-provider'\)/)
 })
 
 test('popup folder pickers expose option and treeitem semantics', () => {
