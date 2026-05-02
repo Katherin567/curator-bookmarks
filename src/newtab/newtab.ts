@@ -40,6 +40,7 @@ import {
   getPortalQuickAccessItems,
   getSearchBookmarkSuggestionsFromIndex,
   getVerticalCenterCollisionOffset,
+  resolvePortalPanelLayout,
   type PortalOverview,
   type PortalQuickAccessItem,
   resolveNewTabContentState,
@@ -97,6 +98,7 @@ const QUICK_ACCESS_ITEM_LIMIT = 8
 const ACTIVITY_RECORD_LIMIT = 160
 const DEFAULT_GENERAL_SETTINGS = {
   hideSettingsTrigger: false,
+  showPortalOverview: true,
   showFrequentBookmarks: true,
   showRecentBookmarks: true
 }
@@ -560,6 +562,9 @@ function bindIconSettingsEvents(): void {
 function bindGeneralSettingsEvents(): void {
   document
     .getElementById('general-hide-settings-trigger')
+    ?.addEventListener('change', handleGeneralSettingsChange)
+  document
+    .getElementById('general-show-overview')
     ?.addEventListener('change', handleGeneralSettingsChange)
   document
     .getElementById('general-show-frequent')
@@ -2772,6 +2777,7 @@ function createBookmarkSections(sections: NewTabFolderSection[]): HTMLElement {
 }
 
 function createPortalPanel(): HTMLElement | null {
+  const showOverview = state.generalSettings.showPortalOverview
   const showFrequent = state.generalSettings.showFrequentBookmarks
   const showRecent = state.generalSettings.showRecentBookmarks
   const overview = buildNewTabPortalOverview({
@@ -2780,20 +2786,27 @@ function createPortalPanel(): HTMLElement | null {
     now: Date.now()
   })
   const quickAccess = createQuickAccessPanel()
+  const layout = resolvePortalPanelLayout({
+    showOverview,
+    hasOverviewSignal: hasPortalOverviewSignal(overview),
+    hasQuickAccess: Boolean(quickAccess)
+  })
 
-  if (!quickAccess && !hasPortalOverviewSignal(overview)) {
+  if (layout === 'hidden') {
     return null
   }
 
   const panel = document.createElement('section')
-  panel.className = 'newtab-portal'
+  panel.className = layout === 'full' ? 'newtab-portal' : `newtab-portal ${layout}`
   panel.setAttribute('aria-label', '今日门户')
 
-  panel.appendChild(createPortalOverview(overview, {
-    showFrequent,
-    showRecent,
-    hasQuickAccess: Boolean(quickAccess)
-  }))
+  if (layout === 'full' || layout === 'overview-only') {
+    panel.appendChild(createPortalOverview(overview, {
+      showFrequent,
+      showRecent,
+      hasQuickAccess: Boolean(quickAccess)
+    }))
+  }
   if (quickAccess) {
     panel.appendChild(quickAccess)
   }
@@ -4607,6 +4620,7 @@ function normalizeGeneralSettings(rawSettings: unknown): typeof DEFAULT_GENERAL_
   const settings = rawSettings as Record<string, unknown>
   return {
     hideSettingsTrigger: settings.hideSettingsTrigger === true,
+    showPortalOverview: settings.showPortalOverview !== false,
     showFrequentBookmarks: settings.showFrequentBookmarks !== false,
     showRecentBookmarks: settings.showRecentBookmarks !== false
   }
@@ -4614,6 +4628,7 @@ function normalizeGeneralSettings(rawSettings: unknown): typeof DEFAULT_GENERAL_
 
 function readGeneralSettingsFromControls(): typeof DEFAULT_GENERAL_SETTINGS {
   const hideInput = document.getElementById('general-hide-settings-trigger')
+  const showOverviewInput = document.getElementById('general-show-overview')
   const showFrequentInput = document.getElementById('general-show-frequent')
   const showRecentInput = document.getElementById('general-show-recent')
 
@@ -4621,6 +4636,9 @@ function readGeneralSettingsFromControls(): typeof DEFAULT_GENERAL_SETTINGS {
     hideSettingsTrigger: hideInput instanceof HTMLInputElement
       ? hideInput.checked
       : state.generalSettings.hideSettingsTrigger,
+    showPortalOverview: showOverviewInput instanceof HTMLInputElement
+      ? showOverviewInput.checked
+      : state.generalSettings.showPortalOverview,
     showFrequentBookmarks: showFrequentInput instanceof HTMLInputElement
       ? showFrequentInput.checked
       : state.generalSettings.showFrequentBookmarks,
@@ -4632,11 +4650,15 @@ function readGeneralSettingsFromControls(): typeof DEFAULT_GENERAL_SETTINGS {
 
 function syncGeneralSettingsControls(): void {
   const hideInput = document.getElementById('general-hide-settings-trigger')
+  const showOverviewInput = document.getElementById('general-show-overview')
   const showFrequentInput = document.getElementById('general-show-frequent')
   const showRecentInput = document.getElementById('general-show-recent')
 
   if (hideInput instanceof HTMLInputElement) {
     hideInput.checked = state.generalSettings.hideSettingsTrigger
+  }
+  if (showOverviewInput instanceof HTMLInputElement) {
+    showOverviewInput.checked = state.generalSettings.showPortalOverview
   }
   if (showFrequentInput instanceof HTMLInputElement) {
     showFrequentInput.checked = state.generalSettings.showFrequentBookmarks

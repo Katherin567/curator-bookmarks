@@ -668,6 +668,16 @@ body.background-mask-enabled .newtab-background-mask {
   backdrop-filter: blur(16px);
 }
 
+.newtab-portal.overview-only {
+  width: min(356px, 100%);
+  grid-template-columns: 1fr;
+  justify-self: start;
+}
+
+.newtab-portal.quick-only {
+  grid-template-columns: 1fr;
+}
+
 .newtab-portal-overview {
   display: grid;
   min-width: 0;
@@ -2733,6 +2743,10 @@ body.settings-trigger-auto-hide .settings-trigger[aria-expanded="true"] {
     grid-template-columns: 1fr;
     gap: 12px;
     padding: 9px;
+  }
+
+  .newtab-portal.overview-only {
+    width: 100%;
   }
 
   .newtab-portal-overview {

@@ -4,6 +4,7 @@ import { test } from 'node:test'
 import {
   buildNewTabPortalOverview,
   getPortalQuickAccessItems,
+  resolvePortalPanelLayout,
   getVerticalCenterCollisionOffset
 } from '../src/newtab/content-state.js'
 
@@ -116,4 +117,27 @@ test('selects portal quick access items without duplicating frequent and recent 
       { id: '2', reason: 'opened', badge: '开' }
     ]
   )
+})
+
+test('resolves portal layout from overview and quick access visibility', () => {
+  assert.equal(resolvePortalPanelLayout({
+    showOverview: true,
+    hasOverviewSignal: true,
+    hasQuickAccess: true
+  }), 'full')
+  assert.equal(resolvePortalPanelLayout({
+    showOverview: true,
+    hasOverviewSignal: true,
+    hasQuickAccess: false
+  }), 'overview-only')
+  assert.equal(resolvePortalPanelLayout({
+    showOverview: false,
+    hasOverviewSignal: true,
+    hasQuickAccess: true
+  }), 'quick-only')
+  assert.equal(resolvePortalPanelLayout({
+    showOverview: false,
+    hasOverviewSignal: true,
+    hasQuickAccess: false
+  }), 'hidden')
 })

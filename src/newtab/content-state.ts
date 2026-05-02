@@ -99,6 +99,14 @@ export interface PortalOverview {
   addedTodayCount: number
 }
 
+export type PortalPanelLayout = 'hidden' | 'full' | 'overview-only' | 'quick-only'
+
+export interface PortalPanelLayoutInput {
+  showOverview: boolean
+  hasOverviewSignal: boolean
+  hasQuickAccess: boolean
+}
+
 export interface MissingFolderViewOptions {
   creatingFolder: boolean
   reason: 'none-selected' | 'selected-unavailable'
@@ -146,6 +154,23 @@ export function resolveNewTabContentState(
   }
 
   return { type: 'bookmarks' }
+}
+
+export function resolvePortalPanelLayout({
+  showOverview,
+  hasOverviewSignal,
+  hasQuickAccess
+}: PortalPanelLayoutInput): PortalPanelLayout {
+  if (showOverview && hasOverviewSignal && hasQuickAccess) {
+    return 'full'
+  }
+  if (showOverview && hasOverviewSignal) {
+    return 'overview-only'
+  }
+  if (hasQuickAccess) {
+    return 'quick-only'
+  }
+  return 'hidden'
 }
 
 export function buildNewTabSearchIndex(
