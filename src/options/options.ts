@@ -2815,6 +2815,7 @@ function renderAiNamingSection() {
     : hasRequiredConfig
       ? '已配置'
       : '待配置'
+  const hasSavedApiKey = Boolean(settings.apiKey)
   const connectivityMeta = getAiNamingConnectivityMeta()
 
   if (dom.aiProviderNoticeText) {
@@ -2859,6 +2860,14 @@ function renderAiNamingSection() {
       wrapperClass: 'status-loading-label',
       loaderClass: 'status-dot-loader'
     })
+  }
+  if (dom.aiConfigLink) {
+    dom.aiConfigLink.textContent = hasSavedApiKey ? '已配置 API KEY' : '配置 API Key'
+    dom.aiConfigLink.classList.toggle('configured', hasSavedApiKey)
+    dom.aiConfigLink.setAttribute(
+      'aria-label',
+      hasSavedApiKey ? '已配置 API KEY，前往通用设置查看或修改' : '配置 API Key'
+    )
   }
 
   dom.aiRunBadge.className = `options-chip ${getAiNamingBadgeTone()}`

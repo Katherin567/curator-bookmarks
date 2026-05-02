@@ -27,6 +27,7 @@ test('smart analysis section uses the renamed Chinese entry copy', () => {
 
   assert.match(optionsHtml, /data-section-link="ai">书签智能分析</)
   assert.match(optionsHtml, /<h1 id="ai-title">书签智能分析<\/h1>/)
+  assert.match(optionsHtml, /id="ai-config-link"[^>]*>配置 API Key<\/a>/)
   assert.match(constants, /title: '书签智能分析'/)
   assert.doesNotMatch(optionsHtml, /标签与命名建议/)
   assert.doesNotMatch(constants, /标签与命名建议/)
