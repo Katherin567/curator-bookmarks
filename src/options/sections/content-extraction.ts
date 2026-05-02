@@ -92,7 +92,7 @@ const NOISE_SELECTOR = [
 
 export function extractPageContentFromHtml(html: string, options: ExtractHtmlOptions = {}): PageContentContext {
   const finalUrl = String(options.url || '').trim()
-  const documentNode = new DOMParser().parseFromString(String(html || ''), 'text/html')
+  const documentNode = new DOMParser().parseFromString(sanitizeHtmlForInertParsing(html), 'text/html')
   const title = cleanText(
     documentNode.querySelector('title')?.textContent ||
       queryMeta(documentNode, 'meta[property="og:title"]') ||
@@ -145,6 +145,33 @@ export function extractPageContentFromHtml(html: string, options: ExtractHtmlOpt
     ...context,
     contentType: detectContentType(context, options.contentType)
   }
+}
+
+export function sanitizeHtmlForInertParsing(html: unknown): string {
+  let sanitized = String(html || '')
+  if (!sanitized) {
+    return ''
+  }
+
+  sanitized = stripHtmlElementWithContent(sanitized, 'script')
+  sanitized = stripHtmlElementWithContent(sanitized, 'style')
+  sanitized = stripHtmlElementWithContent(sanitized, 'noscript')
+  sanitized = stripHtmlElementWithContent(sanitized, 'iframe')
+  sanitized = stripHtmlElementWithContent(sanitized, 'object')
+  sanitized = stripHtmlElementWithContent(sanitized, 'embed')
+  sanitized = stripHtmlElementWithContent(sanitized, 'svg')
+  sanitized = stripHtmlElementWithContent(sanitized, 'canvas')
+  sanitized = stripHtmlElementWithContent(sanitized, 'picture')
+  sanitized = stripHtmlElementWithContent(sanitized, 'audio')
+  sanitized = stripHtmlElementWithContent(sanitized, 'video')
+
+  return sanitized
+    .replace(/<script\b[^>]*(?:\/?>)?/gi, '')
+    .replace(/<link\b(?![^>]*\brel\s*=\s*(?:"[^"]*\bcanonical\b[^"]*"|'[^']*\bcanonical\b[^']*'|[^\s>]*\bcanonical\b[^\s>]*))[^>]*>/gi, '')
+    .replace(/<meta\b(?=[^>]*\bhttp-equiv\s*=\s*(?:"refresh"|'refresh'|refresh\b))[^>]*>/gi, '')
+    .replace(/<base\b[^>]*>/gi, '')
+    .replace(/<(?:img|source|track)\b[^>]*>/gi, '')
+    .replace(/\s(?:src|srcset|poster|data|background)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
 }
 
 export function buildFallbackPageContentFromUrl(
@@ -472,6 +499,10 @@ export function detectContentType(
 
 function queryMeta(documentNode: Document, selector: string): string {
   return truncateCleanText(documentNode.querySelector(selector)?.getAttribute('content') || '', 420)
+}
+
+function stripHtmlElementWithContent(html: string, tagName: string): string {
+  return html.replace(new RegExp(`<${tagName}\\b[^>]*>[\\s\\S]*?<\\/${tagName}\\s*>`, 'gi'), '')
 }
 
 function collectHeadings(documentNode: Document): string[] {
