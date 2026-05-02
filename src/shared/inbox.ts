@@ -58,6 +58,8 @@ export interface InboxState {
   lastUndoMove?: InboxUndoMove
 }
 
+let inboxStateWriteQueue: Promise<unknown> = Promise.resolve()
+
 export function getDefaultInboxSettings(): InboxSettings {
   return {
     version: 1,
@@ -160,35 +162,118 @@ export async function ensureInboxFolder(settings = getDefaultInboxSettings()): P
     ? String(existing.id)
     : String((await createBookmarkFolder({ parentId: String(rootFolder.id), title })).id)
 
-  await saveInboxState({
-    ...storedState,
+  const updateFolderId = (state: InboxState) => ({
+    ...state,
     folderId
   })
+  await updateInboxState(updateFolderId, updateFolderId)
   return folderId
 }
 
 export async function upsertInboxItem(item: InboxItem): Promise<InboxState> {
-  const state = await loadInboxState()
   const nextItem = normalizeInboxItem(item)
   if (!nextItem) {
-    return state
+    return updateInboxState(() => null)
   }
-  return saveInboxState({
-    ...state,
-    folderId: nextItem.inboxFolderId || state.folderId,
-    items: [
-      nextItem,
-      ...state.items.filter((entry) => entry.captureId !== nextItem.captureId && entry.bookmarkId !== nextItem.bookmarkId)
-    ]
-  })
+  const upsertItem = (state: InboxState) => {
+    return {
+      ...state,
+      folderId: nextItem.inboxFolderId || state.folderId,
+      items: [
+        nextItem,
+        ...state.items.filter((entry) => entry.captureId !== nextItem.captureId && entry.bookmarkId !== nextItem.bookmarkId)
+      ]
+    }
+  }
+  return updateInboxState(upsertItem, upsertItem)
 }
 
 export async function updateInboxItem(
   bookmarkId: string,
   patch: Partial<Omit<InboxItem, 'bookmarkId' | 'captureId' | 'createdAt'>>
 ): Promise<InboxItem | null> {
+  let updatedItem: InboxItem | null = null
+  let updatedAt = 0
+  const patchItem = (state: InboxState) => {
+    updatedAt ||= Date.now()
+    const result = patchInboxItemState(state, bookmarkId, patch, updatedAt)
+    updatedItem = result.updatedItem || updatedItem
+    return result.state
+  }
+  await updateInboxState(patchItem, patchItem)
+  return updatedItem
+}
+
+export async function findInboxItemByBookmarkId(bookmarkId: string): Promise<InboxItem | null> {
   const state = await loadInboxState()
-  const now = Date.now()
+  return state.items.find((item) => item.bookmarkId === bookmarkId) || null
+}
+
+export async function recordInboxUndoMove(move: Omit<InboxUndoMove, 'expiresAt'>): Promise<InboxState> {
+  const movedAt = Number(move.movedAt) || Date.now()
+  const recordUndoMove = (state: InboxState) => {
+    return {
+      ...state,
+      lastUndoMove: {
+        bookmarkId: String(move.bookmarkId || '').trim(),
+        fromFolderId: String(move.fromFolderId || '').trim(),
+        toFolderId: String(move.toFolderId || '').trim(),
+        movedAt,
+        expiresAt: movedAt + INBOX_UNDO_MOVE_WINDOW_MS
+      }
+    }
+  }
+  return updateInboxState(recordUndoMove, recordUndoMove)
+}
+
+export async function clearInboxUndoMove(bookmarkId?: string): Promise<void> {
+  const clearUndoMove = (state: InboxState) => {
+    if (!state.lastUndoMove) {
+      return null
+    }
+    if (bookmarkId && state.lastUndoMove.bookmarkId !== bookmarkId) {
+      return null
+    }
+    const { lastUndoMove: _lastUndoMove, ...nextState } = state
+    return nextState
+  }
+  await updateInboxState(clearUndoMove, clearUndoMove)
+}
+
+function updateInboxState(
+  updater: (state: InboxState) => InboxState | null,
+  reconcileAfterWrite: (state: InboxState) => InboxState | null = (state) => state
+): Promise<InboxState> {
+  const task = inboxStateWriteQueue.then(async () => {
+    const currentState = await loadInboxState()
+    const nextState = updater(currentState)
+    if (!nextState) {
+      return currentState
+    }
+    await saveInboxState(nextState)
+
+    const latestState = await loadInboxState()
+    const reconciledState = reconcileAfterWrite(latestState)
+    if (!reconciledState) {
+      return latestState
+    }
+    const normalizedReconciledState = normalizeInboxState(reconciledState)
+    if (!haveSameInboxStates(latestState, normalizedReconciledState)) {
+      return saveInboxState(normalizedReconciledState)
+    }
+    return latestState
+  })
+
+  inboxStateWriteQueue = task.catch(() => {})
+  return task
+}
+
+function patchInboxItemState(
+  state: InboxState,
+  bookmarkId: string,
+  patch: Partial<Omit<InboxItem, 'bookmarkId' | 'captureId' | 'createdAt'>>,
+  updatedAt: number
+): { state: InboxState | null, updatedItem: InboxItem | null } {
   let updatedItem: InboxItem | null = null
   const items = state.items.map((item) => {
     if (item.bookmarkId !== bookmarkId) {
@@ -200,52 +285,28 @@ export async function updateInboxItem(
       bookmarkId: item.bookmarkId,
       captureId: item.captureId,
       createdAt: item.createdAt,
-      updatedAt: now
+      updatedAt
     })
     return updatedItem || item
   })
 
   if (!updatedItem) {
-    return null
-  }
-
-  await saveInboxState({
-    ...state,
-    items
-  })
-  return updatedItem
-}
-
-export async function findInboxItemByBookmarkId(bookmarkId: string): Promise<InboxItem | null> {
-  const state = await loadInboxState()
-  return state.items.find((item) => item.bookmarkId === bookmarkId) || null
-}
-
-export async function recordInboxUndoMove(move: Omit<InboxUndoMove, 'expiresAt'>): Promise<InboxState> {
-  const state = await loadInboxState()
-  const movedAt = Number(move.movedAt) || Date.now()
-  return saveInboxState({
-    ...state,
-    lastUndoMove: {
-      bookmarkId: String(move.bookmarkId || '').trim(),
-      fromFolderId: String(move.fromFolderId || '').trim(),
-      toFolderId: String(move.toFolderId || '').trim(),
-      movedAt,
-      expiresAt: movedAt + INBOX_UNDO_MOVE_WINDOW_MS
+    return {
+      state: null,
+      updatedItem: null
     }
-  })
+  }
+  return {
+    state: {
+      ...state,
+      items
+    },
+    updatedItem
+  }
 }
 
-export async function clearInboxUndoMove(bookmarkId?: string): Promise<void> {
-  const state = await loadInboxState()
-  if (!state.lastUndoMove) {
-    return
-  }
-  if (bookmarkId && state.lastUndoMove.bookmarkId !== bookmarkId) {
-    return
-  }
-  const { lastUndoMove: _lastUndoMove, ...nextState } = state
-  await saveInboxState(nextState)
+function haveSameInboxStates(leftState: InboxState, rightState: InboxState): boolean {
+  return JSON.stringify(leftState) === JSON.stringify(rightState)
 }
 
 function normalizeInboxItem(rawItem: unknown): InboxItem | null {
