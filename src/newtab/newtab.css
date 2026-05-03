@@ -348,10 +348,11 @@ body.background-mask-enabled .newtab-background-mask {
 .newtab-search-slot {
   --search-height: 34px;
   --search-width: 44vw;
+  --search-effective-width: min(max(220px, var(--search-width)), 100%);
   --search-offset-y: 0px;
   position: relative;
   z-index: 2;
-  width: min(540px, 100%);
+  width: 100%;
   height: var(--search-height);
   justify-self: center;
   margin-top: var(--search-offset-y);
@@ -364,7 +365,7 @@ body.background-mask-enabled .newtab-background-mask {
   --search-height: 34px;
   z-index: 1;
   display: flex;
-  width: min(max(220px, var(--search-width)), 540px, 100%);
+  width: var(--search-effective-width);
   height: var(--search-height);
   align-items: center;
   gap: 9px;
@@ -530,7 +531,7 @@ body.background-mask-enabled .newtab-background-mask {
   top: calc(var(--search-height) + 8px);
   left: 50%;
   display: grid;
-  width: min(max(220px, var(--search-width)), 540px, 100%);
+  width: var(--search-effective-width);
   max-height: min(312px, calc(100vh - 180px));
   gap: 3px;
   overflow-y: auto;
@@ -555,7 +556,7 @@ body.background-mask-enabled .newtab-background-mask {
 .newtab-search-engine-menu {
   position: absolute;
   top: calc(var(--search-height) + 8px);
-  right: max(0px, calc((100% - min(max(220px, var(--search-width)), 540px)) / 2));
+  right: max(0px, calc((100% - var(--search-effective-width)) / 2));
   z-index: 3;
   display: grid;
   width: 176px;

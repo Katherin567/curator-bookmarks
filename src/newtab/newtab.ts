@@ -157,7 +157,8 @@ const DEFAULT_GENERAL_SETTINGS = {
   hideSettingsTrigger: false,
   showPortalOverview: true,
   showQuickAccess: true,
-  showSourceNavigation: true
+  showSourceNavigation: true,
+  openBookmarksInNewTab: false
 }
 const FOCUSABLE_SELECTOR = [
   'a[href]',
@@ -664,6 +665,9 @@ function bindGeneralSettingsEvents(): void {
     ?.addEventListener('change', handleGeneralSettingsChange)
   document
     .getElementById('general-show-quick-access')
+    ?.addEventListener('change', handleGeneralSettingsChange)
+  document
+    .getElementById('general-open-bookmarks-new-tab')
     ?.addEventListener('change', handleGeneralSettingsChange)
 }
 
@@ -3873,6 +3877,15 @@ function bindBookmarkNavigation(
     }
 
     event.preventDefault()
+    if (state.generalSettings.openBookmarksInNewTab) {
+      const opened = window.open(url, '_blank', 'noopener')
+      if (opened) {
+        opened.opener = null
+      }
+      void recordBookmarkOpen(bookmark)
+      return
+    }
+
     void recordBookmarkOpen(bookmark).finally(() => {
       window.location.assign(url)
     })
@@ -5664,7 +5677,8 @@ function normalizeGeneralSettings(rawSettings: unknown): typeof DEFAULT_GENERAL_
     showQuickAccess: typeof settings.showQuickAccess === 'boolean'
       ? settings.showQuickAccess
       : legacyQuickAccess,
-    showSourceNavigation: settings.showSourceNavigation !== false
+    showSourceNavigation: settings.showSourceNavigation !== false,
+    openBookmarksInNewTab: settings.openBookmarksInNewTab === true
   }
 }
 
@@ -5672,6 +5686,7 @@ function readGeneralSettingsFromControls(): typeof DEFAULT_GENERAL_SETTINGS {
   const hideInput = document.getElementById('general-hide-settings-trigger')
   const showOverviewInput = document.getElementById('general-show-overview')
   const showQuickAccessInput = document.getElementById('general-show-quick-access')
+  const openBookmarksInput = document.getElementById('general-open-bookmarks-new-tab')
   const showSourceNavigationInput = document.getElementById('folder-show-source-navigation')
 
   return normalizeGeneralSettings({
@@ -5686,7 +5701,10 @@ function readGeneralSettingsFromControls(): typeof DEFAULT_GENERAL_SETTINGS {
       : state.generalSettings.showQuickAccess,
     showSourceNavigation: showSourceNavigationInput instanceof HTMLInputElement
       ? showSourceNavigationInput.checked
-      : state.generalSettings.showSourceNavigation
+      : state.generalSettings.showSourceNavigation,
+    openBookmarksInNewTab: openBookmarksInput instanceof HTMLInputElement
+      ? openBookmarksInput.checked
+      : state.generalSettings.openBookmarksInNewTab
   })
 }
 
@@ -5694,6 +5712,7 @@ function syncGeneralSettingsControls(): void {
   const hideInput = document.getElementById('general-hide-settings-trigger')
   const showOverviewInput = document.getElementById('general-show-overview')
   const showQuickAccessInput = document.getElementById('general-show-quick-access')
+  const openBookmarksInput = document.getElementById('general-open-bookmarks-new-tab')
   const showSourceNavigationInput = document.getElementById('folder-show-source-navigation')
 
   if (hideInput instanceof HTMLInputElement) {
@@ -5704,6 +5723,9 @@ function syncGeneralSettingsControls(): void {
   }
   if (showQuickAccessInput instanceof HTMLInputElement) {
     showQuickAccessInput.checked = state.generalSettings.showQuickAccess
+  }
+  if (openBookmarksInput instanceof HTMLInputElement) {
+    openBookmarksInput.checked = state.generalSettings.openBookmarksInNewTab
   }
   if (showSourceNavigationInput instanceof HTMLInputElement) {
     showSourceNavigationInput.checked = state.generalSettings.showSourceNavigation

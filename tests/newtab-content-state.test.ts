@@ -258,6 +258,19 @@ test('newtab settings expose one combined quick access switch', () => {
   assert.doesNotMatch(html, /id="general-show-recent"/)
 })
 
+test('newtab general settings expose bookmark new tab opening independently from search', () => {
+  const html = readProjectFile('src/newtab/newtab.html')
+  const source = readProjectFile('src/newtab/newtab.ts')
+
+  assert.match(html, /id="general-open-bookmarks-new-tab"/)
+  assert.match(html, /新标签页打开/)
+  assert.match(source, /openBookmarksInNewTab:\s*false/)
+  assert.match(source, /document\s*\n\s*\.getElementById\('general-open-bookmarks-new-tab'\)/)
+  assert.match(source, /openBookmarksInNewTab:\s*settings\.openBookmarksInNewTab === true/)
+  assert.match(source, /state\.generalSettings\.openBookmarksInNewTab/)
+  assert.match(source, /window\.open\(url,\s*'_blank',\s*'noopener'\)/)
+})
+
 test('newtab search settings use Google as the default engine without duplicate default entry', () => {
   const html = readProjectFile('src/newtab/newtab.html')
   const source = readProjectFile('src/newtab/newtab.ts')
@@ -294,6 +307,18 @@ test('newtab search vertical offset uses adaptive runtime bounds', () => {
   assert.match(source, /offsetY:\s*clampNumber\(\s*settings\.offsetY,\s*SEARCH_OFFSET_ABSOLUTE_MIN,\s*SEARCH_OFFSET_ABSOLUTE_MAX,\s*DEFAULT_SEARCH_SETTINGS\.offsetY\s*\)/)
   assert.match(source, /offsetYInput\.min\s*=\s*String\(bounds\.min\)/)
   assert.match(source, /offsetYInput\.max\s*=\s*String\(bounds\.max\)/)
+})
+
+test('newtab search width setting controls the actual form and overlay width', () => {
+  const css = readProjectFile('src/newtab/newtab.css')
+
+  assert.match(css, /--search-effective-width:\s*min\(max\(220px,\s*var\(--search-width\)\),\s*100%\)/)
+  assert.match(css, /\.newtab-search-slot\s*\{[\s\S]*?width:\s*100%/)
+  assert.match(css, /\.newtab-search\s*\{[\s\S]*?width:\s*var\(--search-effective-width\)/)
+  assert.match(css, /\.newtab-search-suggestions-panel\s*\{[\s\S]*?width:\s*var\(--search-effective-width\)/)
+  assert.match(css, /\.newtab-search-engine-menu\s*\{[\s\S]*?var\(--search-effective-width\)/)
+  assert.doesNotMatch(css, /min\(max\(220px,\s*var\(--search-width\)\),\s*540px,\s*100%\)/)
+  assert.doesNotMatch(css, /min\(860px,\s*100%\)/)
 })
 
 test('newtab exposes a lazy options dashboard iframe route', () => {
