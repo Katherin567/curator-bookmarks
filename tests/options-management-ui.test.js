@@ -65,6 +65,20 @@ test('broken-link guidance explains confidence levels and redirect handling', ()
   assert.match(redirectsSource, /更新前会重新读取书签/)
 })
 
+test('availability checks use adaptive runner without adding a speed settings panel', () => {
+  const optionsHtml = readProjectFile('src/options/options.html')
+  const optionsSource = readProjectFile('src/options/options.ts')
+  const runnerSource = readProjectFile('src/options/sections/availability-runner.ts')
+
+  assert.match(optionsSource, /createAvailabilityRunScheduler/)
+  assert.match(optionsSource, /runAvailabilityQueue/)
+  assert.match(optionsSource, /inspectBookmarkAvailability\(bookmark, \{ probeEnabled, scheduler \}\)/)
+  assert.match(optionsSource, /fetchWithTimeout\(url, 'HEAD', timeoutMs\)/)
+  assert.match(runnerSource, /domainConcurrency: 1/)
+  assert.match(runnerSource, /statusCode === 429/)
+  assert.doesNotMatch(optionsHtml, /availability-speed-profile|速度设置/)
+})
+
 test('redirect update rereads current bookmarks and skips stale source URLs', () => {
   const redirectsSource = readProjectFile('src/options/sections/redirects.ts')
 
