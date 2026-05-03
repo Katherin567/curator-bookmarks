@@ -1663,6 +1663,11 @@ body.settings-trigger-auto-hide .settings-trigger[aria-expanded="true"] {
   margin-top: 28px;
 }
 
+.settings-section + .settings-section {
+  padding-top: 24px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
 .settings-section:first-child {
   margin-top: 0;
 }
@@ -1699,6 +1704,16 @@ body.settings-trigger-auto-hide .settings-trigger[aria-expanded="true"] {
   font-size: 12px;
   line-height: 1.3;
   transition: background-color var(--ease-standard);
+}
+
+.setting-row:has(.setting-switch) {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.setting-row:has(.setting-switch) .setting-switch {
+  align-self: center;
+  justify-self: end;
 }
 
 .setting-row:hover {
@@ -2722,6 +2737,16 @@ body.settings-trigger-auto-hide .settings-trigger[aria-expanded="true"] {
     justify-self: end;
   }
 
+  .setting-row:has(.setting-switch) {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+
+  .setting-row:has(.setting-switch) .setting-switch {
+    align-self: center;
+    justify-self: end;
+  }
+
   .setting-select,
   .setting-color,
   .setting-file-button {
@@ -3368,6 +3393,16 @@ body.settings-trigger-auto-hide .settings-trigger[aria-expanded="true"] {
   }
 
   .setting-row .setting-switch {
+    justify-self: end;
+  }
+
+  .setting-row:has(.setting-switch) {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+
+  .setting-row:has(.setting-switch) .setting-switch {
+    align-self: center;
     justify-self: end;
   }
 

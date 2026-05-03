@@ -23,6 +23,11 @@ function getCssRuleBody(css: string, selector: string): string {
   return match?.[1] || ''
 }
 
+function getCssRuleBodies(css: string, selector: string): string[] {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return [...css.matchAll(new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`, 'g'))].map((match) => match[1] || '')
+}
+
 test('does not offset vertically centered icons when utility stack has enough clearance', () => {
   assert.equal(getVerticalCenterCollisionOffset({
     utilityBottom: 120,
@@ -296,11 +301,31 @@ test('newtab settings drawer layout responds to drawer width', () => {
 
 test('newtab settings rows avoid per-option divider lines', () => {
   const css = readProjectFile('src/newtab/newtab.css')
+  const sectionDividerRule = getCssRuleBody(css, '.settings-section + .settings-section')
 
+  assert.match(sectionDividerRule, /border-top:\s*1px solid rgba\(255,\s*255,\s*255,\s*0\.1\)/)
+  assert.match(sectionDividerRule, /padding-top:\s*24px/)
   assert.doesNotMatch(getCssRuleBody(css, '.setting-row'), /border-bottom:/)
   assert.equal(getCssRuleBody(css, '.setting-row:last-child'), '')
   assert.doesNotMatch(getCssRuleBody(css, '.icon-live-preview-panel'), /border-bottom:/)
   assert.doesNotMatch(getCssRuleBody(css, '.icon-preset-row'), /border-bottom:/)
+})
+
+test('newtab settings switch rows stay aligned with their labels', () => {
+  const css = readProjectFile('src/newtab/newtab.css')
+  const switchRowRules = getCssRuleBodies(css, '.setting-row:has(.setting-switch)')
+  const switchRules = getCssRuleBodies(css, '.setting-row:has(.setting-switch) .setting-switch')
+
+  assert.equal(switchRowRules.length, 3)
+  assert.equal(switchRules.length, 3)
+  for (const rule of switchRowRules) {
+    assert.match(rule, /grid-template-columns:\s*minmax\(0,\s*1fr\)\s*auto/)
+    assert.match(rule, /align-items:\s*center/)
+  }
+  for (const rule of switchRules) {
+    assert.match(rule, /align-self:\s*center/)
+    assert.match(rule, /justify-self:\s*end/)
+  }
 })
 
 test('newtab settings section titles are visually prominent', () => {
