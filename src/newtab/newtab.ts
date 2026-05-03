@@ -65,6 +65,16 @@ import {
   validateBackgroundBlobSize,
   validateBackgroundContentLength
 } from './interactions.js'
+import {
+  DEFAULT_ENABLED_SEARCH_ENGINE_IDS,
+  SEARCH_ENGINE_CONFIG_BY_ID,
+  SEARCH_MULTI_OPEN_LIMIT,
+  buildSearchEngineUrl,
+  normalizeEnabledSearchEngineIds,
+  normalizeSearchEngineId,
+  planSearchOpenTargets,
+  type SearchEngineId
+} from './search-engines.js'
 
 const FAVICON_SIZE = 64
 const CUSTOM_ICON_MAX_BYTES = 2 * 1024 * 1024
@@ -93,14 +103,14 @@ const SUPPORTED_BACKGROUND_MASK_STYLES = new Set(['dark', 'frosted', 'light'])
 const DEFAULT_SEARCH_SETTINGS = {
   enabled: true,
   openInNewTab: false,
-  engine: 'default',
+  engine: 'default' as SearchEngineId,
+  enabledEngines: DEFAULT_ENABLED_SEARCH_ENGINE_IDS,
   placeholder: '搜索网页或书签',
   width: 44,
   height: 34,
   offsetY: 0,
   background: 58
 }
-const SUPPORTED_SEARCH_ENGINES = new Set(['default', 'google', 'bing', 'baidu', 'duckduckgo'])
 const SEARCH_SUGGESTION_LIMIT = 6
 const QUICK_ACCESS_ITEM_LIMIT = 8
 const ACTIVITY_RECORD_LIMIT = 160
@@ -589,6 +599,9 @@ function bindSearchSettingsEvents(): void {
   document.getElementById('search-enabled')?.addEventListener('change', handleSearchSettingsChange)
   document.getElementById('search-open-new-tab')?.addEventListener('change', handleSearchSettingsChange)
   document.getElementById('search-engine')?.addEventListener('change', handleSearchSettingsChange)
+  document.querySelectorAll<HTMLInputElement>('[data-search-engine-toggle]').forEach((input) => {
+    input.addEventListener('change', handleSearchSettingsChange)
+  })
   document.getElementById('search-placeholder')?.addEventListener('input', handleSearchSettingsChange)
   document.getElementById('search-width')?.addEventListener('input', handleSearchSettingsChange)
   document.getElementById('search-height')?.addEventListener('input', handleSearchSettingsChange)
@@ -2546,6 +2559,67 @@ function createSearchWidget(): HTMLElement | null {
   clearButton.setAttribute('aria-label', '清空搜索')
   clearButton.textContent = '×'
 
+  const engineButton = document.createElement('button')
+  engineButton.className = 'newtab-search-engine'
+  engineButton.type = 'button'
+  engineButton.setAttribute('aria-haspopup', 'menu')
+  engineButton.setAttribute('aria-expanded', 'false')
+
+  const updateEngineButton = () => {
+    const engine = SEARCH_ENGINE_CONFIG_BY_ID.get(state.searchSettings.engine)
+    const label = engine?.shortName || '搜索'
+    engineButton.textContent = label
+    engineButton.title = `当前引擎：${engine?.name || label}。Cmd/Ctrl+Enter 搜索前 ${SEARCH_MULTI_OPEN_LIMIT} 个启用引擎。`
+    engineButton.setAttribute('aria-label', `选择搜索引擎，当前为 ${engine?.name || label}`)
+  }
+
+  const closeEngineMenu = () => {
+    const existingMenu = slot.querySelector<HTMLElement>('.newtab-search-engine-menu')
+    existingMenu?.remove()
+    engineButton.setAttribute('aria-expanded', 'false')
+  }
+
+  const renderEngineMenu = () => {
+    closeEngineMenu()
+    const menu = document.createElement('div')
+    menu.className = 'newtab-search-engine-menu'
+    menu.setAttribute('role', 'menu')
+    menu.setAttribute('aria-label', '搜索引擎')
+
+    for (const engineId of state.searchSettings.enabledEngines) {
+      const engine = SEARCH_ENGINE_CONFIG_BY_ID.get(engineId)
+      if (!engine) {
+        continue
+      }
+
+      const item = document.createElement('button')
+      item.className = `newtab-search-engine-item${engineId === state.searchSettings.engine ? ' active' : ''}`
+      item.type = 'button'
+      item.setAttribute('role', 'menuitemradio')
+      item.setAttribute('aria-checked', String(engineId === state.searchSettings.engine))
+      item.textContent = engine.name
+      item.addEventListener('click', () => {
+        state.searchSettings = normalizeSearchSettings({
+          ...state.searchSettings,
+          engine: engineId
+        })
+        scheduleSearchSettingsSave()
+        updateEngineButton()
+        closeEngineMenu()
+        input.focus()
+        renderSuggestions({ preserveActive: true })
+      })
+      menu.appendChild(item)
+    }
+
+    const hint = document.createElement('div')
+    hint.className = 'newtab-search-engine-menu-hint'
+    hint.textContent = `Cmd/Ctrl+Enter 打开前 ${SEARCH_MULTI_OPEN_LIMIT} 个启用引擎`
+    menu.appendChild(hint)
+    slot.appendChild(menu)
+    engineButton.setAttribute('aria-expanded', 'true')
+  }
+
   const separator = document.createElement('span')
   separator.className = 'newtab-search-separator hidden'
   separator.setAttribute('aria-hidden', 'true')
@@ -2609,7 +2683,7 @@ function createSearchWidget(): HTMLElement | null {
         return
       }
 
-      searchHint.textContent = `没有匹配的书签。按 Enter 使用网页搜索：${query}`
+      searchHint.textContent = getEngineSearchHint(query)
       suggestionsPanel.classList.remove('hidden')
       suggestionsHeading.hidden = true
       input.setAttribute('aria-expanded', 'true')
@@ -2673,7 +2747,7 @@ function createSearchWidget(): HTMLElement | null {
       return
     }
 
-    if (event.key === 'Enter' && activeSuggestionIndex >= 0) {
+    if (event.key === 'Enter' && activeSuggestionIndex >= 0 && !event.metaKey && !event.ctrlKey) {
       const suggestion = searchSuggestions[activeSuggestionIndex]
       if (suggestion) {
         event.preventDefault()
@@ -2709,20 +2783,38 @@ function createSearchWidget(): HTMLElement | null {
     hideSuggestions()
     input.focus()
   })
+  engineButton.addEventListener('click', () => {
+    if (engineButton.getAttribute('aria-expanded') === 'true') {
+      closeEngineMenu()
+      return
+    }
+    renderEngineMenu()
+  })
   form.addEventListener('submit', (event) => {
     event.preventDefault()
+    closeEngineMenu()
     hideSuggestions()
     submitSearch(input.value)
+  })
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault()
+      closeEngineMenu()
+      hideSuggestions()
+      submitSearch(input.value, true)
+    }
   })
   slot.addEventListener('focusout', () => {
     window.setTimeout(() => {
       if (!slot.contains(document.activeElement)) {
+        closeEngineMenu()
         hideSuggestions()
       }
     }, 0)
   })
 
-  form.append(input, clearButton, separator, submitButton)
+  updateEngineButton()
+  form.append(input, clearButton, separator, engineButton, submitButton)
   syncSearchInputActions(input, clearButton, separator, submitButton)
   slot.append(form, suggestionsPanel)
   return slot
@@ -2751,10 +2843,21 @@ function getSearchBookmarkSuggestions(query: string): SearchBookmarkSuggestion[]
 
 function getSearchEnterHint(suggestion: SearchBookmarkSuggestion | undefined): string {
   if (!suggestion) {
-    return 'Enter 搜索网页'
+    return getEngineSearchHint('')
   }
 
-  return `Enter 打开「${suggestion.title}」；搜索图标搜索网页`
+  return `Enter 打开「${suggestion.title}」；搜索图标使用 ${getCurrentSearchEngineName()} 搜索网页`
+}
+
+function getCurrentSearchEngineName(): string {
+  return SEARCH_ENGINE_CONFIG_BY_ID.get(state.searchSettings.engine)?.name || '默认'
+}
+
+function getEngineSearchHint(query: string): string {
+  const engineName = getCurrentSearchEngineName()
+  const normalizedQuery = String(query || '').trim()
+  const queryText = normalizedQuery ? `：${normalizedQuery}` : ''
+  return `按 Enter 使用 ${engineName} 搜索${queryText}；Cmd/Ctrl+Enter 打开前 ${SEARCH_MULTI_OPEN_LIMIT} 个启用引擎`
 }
 
 function createSearchSuggestionButton(
@@ -4737,12 +4840,12 @@ function normalizeSearchSettings(rawSettings: unknown): typeof DEFAULT_SEARCH_SE
 
   const settings = rawSettings as Record<string, unknown>
   const placeholder = String(settings.placeholder || '').trim() || DEFAULT_SEARCH_SETTINGS.placeholder
+  const engine = normalizeSearchEngineId(settings.engine, DEFAULT_SEARCH_SETTINGS.engine)
   return {
     enabled: settings.enabled !== false,
     openInNewTab: settings.openInNewTab === true,
-    engine: SUPPORTED_SEARCH_ENGINES.has(String(settings.engine))
-      ? String(settings.engine)
-      : DEFAULT_SEARCH_SETTINGS.engine,
+    engine,
+    enabledEngines: normalizeEnabledSearchEngineIds(settings.enabledEngines, engine),
     placeholder,
     width: clampNumber(settings.width, 16, 72, DEFAULT_SEARCH_SETTINGS.width),
     height: clampNumber(settings.height, 28, 56, DEFAULT_SEARCH_SETTINGS.height),
@@ -4759,6 +4862,9 @@ function readSearchSettingsFromControls(): typeof DEFAULT_SEARCH_SETTINGS {
   const enabledInput = document.getElementById('search-enabled')
   const openInput = document.getElementById('search-open-new-tab')
   const engineInput = document.getElementById('search-engine')
+  const engineToggleInputs = Array.from(
+    document.querySelectorAll<HTMLInputElement>('[data-search-engine-toggle]')
+  )
   const placeholderInput = document.getElementById('search-placeholder')
   const widthInput = document.getElementById('search-width')
   const heightInput = document.getElementById('search-height')
@@ -4769,6 +4875,11 @@ function readSearchSettingsFromControls(): typeof DEFAULT_SEARCH_SETTINGS {
     enabled: enabledInput instanceof HTMLInputElement ? enabledInput.checked : state.searchSettings.enabled,
     openInNewTab: openInput instanceof HTMLInputElement ? openInput.checked : state.searchSettings.openInNewTab,
     engine: engineInput instanceof HTMLSelectElement ? engineInput.value : state.searchSettings.engine,
+    enabledEngines: engineToggleInputs.length
+      ? engineToggleInputs
+        .filter((input) => input.checked)
+        .map((input) => input.dataset.searchEngineToggle || '')
+      : state.searchSettings.enabledEngines,
     placeholder: placeholderInput instanceof HTMLInputElement ? placeholderInput.value : state.searchSettings.placeholder,
     width: widthInput instanceof HTMLInputElement ? Number(widthInput.value) : state.searchSettings.width,
     height: heightInput instanceof HTMLInputElement ? Number(heightInput.value) : state.searchSettings.height,
@@ -4782,6 +4893,9 @@ function syncSearchSettingsControls(): void {
   const enabledInput = document.getElementById('search-enabled')
   const openInput = document.getElementById('search-open-new-tab')
   const engineInput = document.getElementById('search-engine')
+  const engineToggleInputs = Array.from(
+    document.querySelectorAll<HTMLInputElement>('[data-search-engine-toggle]')
+  )
   const placeholderInput = document.getElementById('search-placeholder')
   const widthInput = document.getElementById('search-width')
   const heightInput = document.getElementById('search-height')
@@ -4790,6 +4904,7 @@ function syncSearchSettingsControls(): void {
   const dependentControls = [
     openInput,
     engineInput,
+    ...engineToggleInputs,
     placeholderInput,
     widthInput,
     heightInput,
@@ -4807,6 +4922,14 @@ function syncSearchSettingsControls(): void {
   if (engineInput instanceof HTMLSelectElement) {
     engineInput.value = settings.engine
     engineInput.disabled = !settings.enabled
+  }
+  for (const input of engineToggleInputs) {
+    const engineId = input.dataset.searchEngineToggle || ''
+    const isSelected = settings.engine === engineId
+    input.checked = settings.enabledEngines.includes(engineId as SearchEngineId)
+    input.disabled = !settings.enabled || isSelected
+    input.closest<HTMLElement>('.search-engine-toggle')?.classList.toggle('active', input.checked)
+    input.closest<HTMLElement>('.search-engine-toggle')?.classList.toggle('locked', isSelected)
   }
   if (placeholderInput instanceof HTMLInputElement) {
     placeholderInput.value = settings.placeholder
@@ -5456,14 +5579,26 @@ function renderIconPresetCards(): void {
   }
 }
 
-function submitSearch(value: string): void {
+function submitSearch(value: string, openAllEnabled = false): void {
   const query = String(value || '').trim()
   if (!query) {
     return
   }
 
-  const targetUrl = getDirectNavigationUrl(query) || getSearchUrl(query, state.searchSettings.engine)
-  openSearchTarget(targetUrl)
+  const directUrl = getDirectNavigationUrl(query)
+  if (directUrl) {
+    openSearchTarget(directUrl)
+    return
+  }
+
+  const targets = planSearchOpenTargets(
+    query,
+    state.searchSettings.engine,
+    state.searchSettings.enabledEngines,
+    openAllEnabled,
+    SEARCH_MULTI_OPEN_LIMIT
+  )
+  openSearchTargets(targets.map((target) => target.url))
 }
 
 function getDirectNavigationUrl(value: string): string {
@@ -5494,22 +5629,30 @@ function getDirectNavigationUrl(value: string): string {
 }
 
 function getSearchUrl(query: string, engine: string): string {
-  const encodedQuery = encodeURIComponent(query)
-  switch (engine) {
-    case 'bing':
-      return `https://www.bing.com/search?q=${encodedQuery}`
-    case 'baidu':
-      return `https://www.baidu.com/s?wd=${encodedQuery}`
-    case 'duckduckgo':
-      return `https://duckduckgo.com/?q=${encodedQuery}`
-    case 'google':
-    case 'default':
-    default:
-      return `https://www.google.com/search?q=${encodedQuery}`
-  }
+  return buildSearchEngineUrl(query, normalizeSearchEngineId(engine))
 }
 
 function openSearchTarget(targetUrl: string): void {
+  openSearchTargets([targetUrl])
+}
+
+function openSearchTargets(targetUrls: string[]): void {
+  const urls = targetUrls.filter(Boolean)
+  if (!urls.length) {
+    return
+  }
+
+  if (urls.length > 1) {
+    for (const url of urls.slice(0, SEARCH_MULTI_OPEN_LIMIT)) {
+      const opened = window.open(url, '_blank', 'noopener')
+      if (opened) {
+        opened.opener = null
+      }
+    }
+    return
+  }
+
+  const targetUrl = urls[0]
   if (state.searchSettings.openInNewTab) {
     const opened = window.open(targetUrl, '_blank', 'noopener')
     if (opened) {
