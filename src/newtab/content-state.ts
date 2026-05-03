@@ -139,7 +139,28 @@ export interface VerticalCenterCollisionOffsetInput {
   minimumGap?: number
 }
 
+export interface AdaptiveSearchOffsetBoundsInput {
+  currentOffsetY: number
+  searchTop: number
+  searchBottom: number
+  viewportTop: number
+  viewportBottom: number
+  previousModuleBottom?: number
+  primaryContentTop?: number
+  minimumGap?: number
+  absoluteMin?: number
+  absoluteMax?: number
+}
+
+export interface AdaptiveSearchOffsetBounds {
+  min: number
+  max: number
+}
+
 const DEFAULT_VERTICAL_CENTER_COLLISION_GAP = 12
+const DEFAULT_ADAPTIVE_SEARCH_OFFSET_GAP = 12
+const DEFAULT_ADAPTIVE_SEARCH_OFFSET_MIN = -240
+const DEFAULT_ADAPTIVE_SEARCH_OFFSET_MAX = 240
 
 export function getVerticalCenterCollisionOffset({
   utilityBottom,
@@ -152,6 +173,55 @@ export function getVerticalCenterCollisionOffset({
     return 0
   }
   return Math.max(0, offset)
+}
+
+export function getAdaptiveSearchOffsetBounds({
+  currentOffsetY,
+  searchTop,
+  searchBottom,
+  viewportTop,
+  viewportBottom,
+  previousModuleBottom,
+  primaryContentTop,
+  minimumGap = DEFAULT_ADAPTIVE_SEARCH_OFFSET_GAP,
+  absoluteMin = DEFAULT_ADAPTIVE_SEARCH_OFFSET_MIN,
+  absoluteMax = DEFAULT_ADAPTIVE_SEARCH_OFFSET_MAX
+}: AdaptiveSearchOffsetBoundsInput): AdaptiveSearchOffsetBounds {
+  const safeGap = Math.max(0, minimumGap)
+  const minBound = Math.min(absoluteMin, absoluteMax)
+  const maxBound = Math.max(absoluteMin, absoluteMax)
+  const currentOffset = Number.isFinite(currentOffsetY) ? currentOffsetY : 0
+  const safeViewportTop = Number.isFinite(viewportTop) ? viewportTop : 0
+  const safeViewportBottom = Number.isFinite(viewportBottom) ? viewportBottom : safeViewportTop
+  const topCandidates = [safeViewportTop + safeGap]
+
+  if (Number.isFinite(previousModuleBottom)) {
+    topCandidates.push(Number(previousModuleBottom) + safeGap)
+  }
+
+  const bottomCandidates = [safeViewportBottom - safeGap]
+  if (Number.isFinite(primaryContentTop)) {
+    bottomCandidates.push(Number(primaryContentTop) - safeGap)
+  }
+
+  const minimumTop = Math.max(...topCandidates)
+  const maximumBottom = Math.min(...bottomCandidates)
+  const measuredMin = Math.floor(currentOffset + minimumTop - searchTop)
+  const measuredMax = Math.ceil(currentOffset + maximumBottom - searchBottom)
+
+  if (!Number.isFinite(measuredMin) || !Number.isFinite(measuredMax)) {
+    const fallback = Math.min(maxBound, Math.max(minBound, currentOffset))
+    return { min: fallback, max: fallback }
+  }
+
+  const min = Math.min(maxBound, Math.max(minBound, measuredMin))
+  const max = Math.min(maxBound, Math.max(minBound, measuredMax))
+  if (max < min) {
+    const fallback = Math.min(maxBound, Math.max(minBound, currentOffset))
+    return { min: fallback, max: fallback }
+  }
+
+  return { min, max }
 }
 
 export function resolveNewTabContentState(

@@ -42,8 +42,10 @@ import {
   getPortalQuickAccessItems,
   getNewTabSourceAnchorId,
   getSearchBookmarkSuggestionsFromIndex,
+  getAdaptiveSearchOffsetBounds,
   getVerticalCenterCollisionOffset,
   resolvePortalPanelLayout,
+  type AdaptiveSearchOffsetBounds,
   type PortalOverview,
   type PortalQuickAccessItem,
   resolveNewTabContentState,
@@ -144,6 +146,10 @@ const DEFAULT_SEARCH_SETTINGS = {
   offsetY: 0,
   background: 58
 }
+const SEARCH_OFFSET_BOUNDS_FALLBACK: AdaptiveSearchOffsetBounds = { min: -32, max: 72 }
+const SEARCH_OFFSET_ABSOLUTE_MIN = -240
+const SEARCH_OFFSET_ABSOLUTE_MAX = 240
+const NEWTAB_LAYOUT_SAFE_GAP = 12
 const SEARCH_SUGGESTION_LIMIT = 6
 const QUICK_ACCESS_ITEM_LIMIT = 8
 const ACTIVITY_RECORD_LIMIT = 160
@@ -284,6 +290,7 @@ const state = {
   settingsSaveMessage: '',
   dashboardOpen: false,
   dashboardFrameLoaded: false,
+  searchOffsetBounds: { ...SEARCH_OFFSET_BOUNDS_FALLBACK } as AdaptiveSearchOffsetBounds,
   faviconRefreshTokens: new Map<string, number>()
 }
 
@@ -1007,6 +1014,7 @@ function openSettingsDrawer(options?: { focusFirstControl?: boolean }): void {
   syncTimeSettingsControls()
   syncSettingsSaveStatus()
   updateAllSettingRangeVisuals()
+  scheduleAdaptiveNewTabLayoutUpdate()
   settingsDrawer?.classList.add('open')
   settingsBackdrop?.classList.add('open')
   settingsDrawer?.setAttribute('aria-hidden', 'false')
@@ -2520,7 +2528,7 @@ function render(): void {
     return
   }
 
-  cancelScheduledVerticalCenterCollisionUpdate()
+  cancelScheduledAdaptiveNewTabLayoutUpdate()
   root.replaceChildren()
   const contentState = resolveNewTabContentState({
     loading: state.loading,
@@ -2550,11 +2558,12 @@ function render(): void {
       },
       onOpenFolderSettings: openFolderSourceSettings
     })))
+    scheduleAdaptiveNewTabLayoutUpdate()
     return
   }
 
   root.appendChild(createNewTabLayout(createBookmarkSections(state.folderSections)))
-  scheduleVerticalCenterCollisionUpdate()
+  scheduleAdaptiveNewTabLayoutUpdate()
 }
 
 function syncDashboardRoute(): void {
@@ -2691,7 +2700,7 @@ function scheduleRender({ updateClock = false } = {}): void {
   })
 }
 
-function cancelScheduledVerticalCenterCollisionUpdate(): void {
+function cancelScheduledAdaptiveNewTabLayoutUpdate(): void {
   if (!verticalCenterCollisionFrame) {
     return
   }
@@ -2700,12 +2709,54 @@ function cancelScheduledVerticalCenterCollisionUpdate(): void {
   verticalCenterCollisionFrame = 0
 }
 
-function scheduleVerticalCenterCollisionUpdate(): void {
-  cancelScheduledVerticalCenterCollisionUpdate()
+function scheduleAdaptiveNewTabLayoutUpdate(): void {
+  cancelScheduledAdaptiveNewTabLayoutUpdate()
   verticalCenterCollisionFrame = window.requestAnimationFrame(() => {
     verticalCenterCollisionFrame = 0
+    updateAdaptiveSearchOffsetBounds()
     updateVerticalCenterCollisionOffset()
   })
+}
+
+function updateAdaptiveSearchOffsetBounds(): void {
+  const page = root?.querySelector<HTMLElement>('.newtab-page')
+  const slot = page?.querySelector<HTMLElement>('.newtab-search-slot')
+  if (!page || !slot) {
+    state.searchOffsetBounds = { ...SEARCH_OFFSET_BOUNDS_FALLBACK }
+    syncSearchOffsetControl()
+    return
+  }
+
+  const shellRect = root?.getBoundingClientRect()
+  const searchRect = slot.getBoundingClientRect()
+  const previousModule = slot.previousElementSibling instanceof HTMLElement
+    ? slot.previousElementSibling
+    : null
+  const primaryContent = page.dataset.iconVerticalCenter === 'true'
+    ? page.querySelector<HTMLElement>(':scope > .newtab-primary-slot > .newtab-content')
+    : null
+  const viewportTop = shellRect?.top ?? 0
+  const viewportBottom = shellRect?.bottom ??
+    (document.documentElement.clientHeight || window.innerHeight || 0)
+  const bounds = getAdaptiveSearchOffsetBounds({
+    currentOffsetY: state.searchSettings.offsetY,
+    searchTop: searchRect.top,
+    searchBottom: searchRect.bottom,
+    viewportTop,
+    viewportBottom,
+    previousModuleBottom: previousModule?.getBoundingClientRect().bottom,
+    primaryContentTop: primaryContent?.getBoundingClientRect().top,
+    minimumGap: NEWTAB_LAYOUT_SAFE_GAP,
+    absoluteMin: SEARCH_OFFSET_ABSOLUTE_MIN,
+    absoluteMax: SEARCH_OFFSET_ABSOLUTE_MAX
+  })
+
+  state.searchOffsetBounds = bounds
+  slot.style.setProperty(
+    '--search-offset-y',
+    `${clampNumber(state.searchSettings.offsetY, bounds.min, bounds.max, DEFAULT_SEARCH_SETTINGS.offsetY)}px`
+  )
+  syncSearchOffsetControl()
 }
 
 function updateVerticalCenterCollisionOffset(): void {
@@ -5448,7 +5499,12 @@ function normalizeSearchSettings(rawSettings: unknown): typeof DEFAULT_SEARCH_SE
     placeholder,
     width: clampNumber(settings.width, 16, 72, DEFAULT_SEARCH_SETTINGS.width),
     height: clampNumber(settings.height, 28, 56, DEFAULT_SEARCH_SETTINGS.height),
-    offsetY: clampNumber(settings.offsetY, -32, 72, DEFAULT_SEARCH_SETTINGS.offsetY),
+    offsetY: clampNumber(
+      settings.offsetY,
+      SEARCH_OFFSET_ABSOLUTE_MIN,
+      SEARCH_OFFSET_ABSOLUTE_MAX,
+      DEFAULT_SEARCH_SETTINGS.offsetY
+    ),
     background: clampNumber(settings.background, 0, 92, DEFAULT_SEARCH_SETTINGS.background)
   }
 }
@@ -5542,10 +5598,7 @@ function syncSearchSettingsControls(): void {
     heightInput.value = String(settings.height)
     heightInput.disabled = !settings.enabled
   }
-  if (offsetYInput instanceof HTMLInputElement) {
-    offsetYInput.value = String(settings.offsetY)
-    offsetYInput.disabled = !settings.enabled
-  }
+  syncSearchOffsetControl()
   if (backgroundInput instanceof HTMLInputElement) {
     backgroundInput.value = String(settings.background)
     backgroundInput.disabled = !settings.enabled
@@ -5553,7 +5606,6 @@ function syncSearchSettingsControls(): void {
 
   setTextContent('search-width-value', `${settings.width}vw`)
   setTextContent('search-height-value', `${settings.height}px`)
-  setTextContent('search-offset-y-value', `${settings.offsetY}px`)
   setTextContent('search-background-value', `${settings.background}%`)
 
   for (const control of dependentControls) {
@@ -5562,6 +5614,25 @@ function syncSearchSettingsControls(): void {
       : null
     row?.classList.toggle('setting-row-disabled', !settings.enabled)
   }
+}
+
+function syncSearchOffsetControl(): void {
+  const offsetYInput = document.getElementById('search-offset-y')
+  const bounds = state.searchOffsetBounds || SEARCH_OFFSET_BOUNDS_FALLBACK
+  const value = clampNumber(
+    state.searchSettings.offsetY,
+    bounds.min,
+    bounds.max,
+    DEFAULT_SEARCH_SETTINGS.offsetY
+  )
+  if (offsetYInput instanceof HTMLInputElement) {
+    offsetYInput.min = String(bounds.min)
+    offsetYInput.max = String(bounds.max)
+    offsetYInput.value = String(value)
+    offsetYInput.disabled = !state.searchSettings.enabled
+    updateSettingRangeVisual(offsetYInput)
+  }
+  setTextContent('search-offset-y-value', `${value}px`)
 }
 
 async function saveSearchSettings(): Promise<void> {

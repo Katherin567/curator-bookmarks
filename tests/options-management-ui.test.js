@@ -118,12 +118,15 @@ test('dashboard search toolbar omits duplicate result count and placeholder copy
 })
 
 test('dashboard search input reuses the animated bottom focus indicator', () => {
+  const optionsHtml = readProjectFile('src/options/options.html')
   const optionsCss = readProjectFile('src/options/options.css')
 
-  assert.match(optionsCss, /\.dashboard-search\s*\{[\s\S]*?--accent-color:\s*#a3e583[\s\S]*?position:\s*relative/)
-  assert.match(optionsCss, /\.dashboard-search::before,\s*\.dashboard-search::after\s*\{[\s\S]*?bottom:\s*-1px/)
-  assert.match(optionsCss, /\.dashboard-search::after\s*\{[\s\S]*?transform:\s*scaleX\(0\)/)
-  assert.match(optionsCss, /\.dashboard-search:focus-within::after\s*\{[\s\S]*?transform:\s*scaleX\(1\)/)
+  assert.match(optionsHtml, /<span class="dashboard-search-input-field">\s*<input id="dashboard-query"/)
+  assert.match(optionsCss, /\.dashboard-search-input-field\s*\{[\s\S]*?--accent-color:\s*#a3e583[\s\S]*?position:\s*relative/)
+  assert.match(optionsCss, /\.dashboard-search-input-field::before,\s*\.dashboard-search-input-field::after\s*\{[\s\S]*?bottom:\s*-1px/)
+  assert.match(optionsCss, /\.dashboard-search-input-field::after\s*\{[\s\S]*?transform:\s*scaleX\(0\)/)
+  assert.match(optionsCss, /\.dashboard-search-input-field:focus-within::after\s*\{[\s\S]*?transform:\s*scaleX\(1\)/)
+  assert.doesNotMatch(optionsCss, /\.dashboard-search::after\s*\{/)
 })
 
 test('dashboard folder sidebar layout and active styles are defined', () => {

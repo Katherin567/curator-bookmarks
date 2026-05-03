@@ -10,6 +10,7 @@ import {
   getNewTabSourceAnchorId,
   getPortalQuickAccessItems,
   resolvePortalPanelLayout,
+  getAdaptiveSearchOffsetBounds,
   getVerticalCenterCollisionOffset
 } from '../src/newtab/content-state.js'
 
@@ -48,6 +49,51 @@ test('supports custom minimum clearance for compact viewports', () => {
     contentTop: 140,
     minimumGap: 4
   }), 24)
+})
+
+test('adaptive newtab search offset expands into real empty layout space', () => {
+  assert.deepEqual(getAdaptiveSearchOffsetBounds({
+    currentOffsetY: 0,
+    searchTop: 100,
+    searchBottom: 134,
+    viewportTop: 20,
+    viewportBottom: 720,
+    previousModuleBottom: 74,
+    primaryContentTop: 430
+  }), {
+    min: -14,
+    max: 240
+  })
+})
+
+test('adaptive newtab search offset keeps the input between neighboring modules', () => {
+  assert.deepEqual(getAdaptiveSearchOffsetBounds({
+    currentOffsetY: 40,
+    searchTop: 140,
+    searchBottom: 174,
+    viewportTop: 20,
+    viewportBottom: 420,
+    previousModuleBottom: 132,
+    primaryContentTop: 210
+  }), {
+    min: 44,
+    max: 64
+  })
+})
+
+test('adaptive newtab search offset clamps saved positions away from centered bookmarks', () => {
+  assert.deepEqual(getAdaptiveSearchOffsetBounds({
+    currentOffsetY: 160,
+    searchTop: 260,
+    searchBottom: 294,
+    viewportTop: 20,
+    viewportBottom: 720,
+    previousModuleBottom: 74,
+    primaryContentTop: 230
+  }), {
+    min: -14,
+    max: 84
+  })
 })
 
 test('builds a compact newtab portal overview from folders and activity', () => {
@@ -232,6 +278,22 @@ test('newtab search background opacity exposes a wide direct alpha range', () =>
   assert.match(source, /background:\s*clampNumber\(settings\.background,\s*0,\s*92,\s*DEFAULT_SEARCH_SETTINGS\.background\)/)
   assert.match(css, /background:\s*rgba\(8,\s*8,\s*9,\s*var\(--search-bg-alpha\)\)/)
   assert.doesNotMatch(css, /var\(--search-bg-alpha\)\s*\+\s*0\.24/)
+})
+
+test('newtab search vertical offset uses adaptive runtime bounds', () => {
+  const html = readProjectFile('src/newtab/newtab.html')
+  const css = readProjectFile('src/newtab/newtab.css')
+  const source = readProjectFile('src/newtab/newtab.ts')
+  const offsetInput = html.match(/<input[^>]+id="search-offset-y"[^>]*>/)?.[0] || ''
+
+  assert.match(offsetInput, /min="-240"/)
+  assert.match(offsetInput, /max="240"/)
+  assert.match(css, /margin-top:\s*var\(--search-offset-y\)/)
+  assert.doesNotMatch(css, /margin-top:\s*max\(var\(--search-offset-y\)/)
+  assert.match(source, /getAdaptiveSearchOffsetBounds\(/)
+  assert.match(source, /offsetY:\s*clampNumber\(\s*settings\.offsetY,\s*SEARCH_OFFSET_ABSOLUTE_MIN,\s*SEARCH_OFFSET_ABSOLUTE_MAX,\s*DEFAULT_SEARCH_SETTINGS\.offsetY\s*\)/)
+  assert.match(source, /offsetYInput\.min\s*=\s*String\(bounds\.min\)/)
+  assert.match(source, /offsetYInput\.max\s*=\s*String\(bounds\.max\)/)
 })
 
 test('newtab exposes a lazy options dashboard iframe route', () => {
