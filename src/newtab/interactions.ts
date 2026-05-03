@@ -7,6 +7,13 @@ export interface BookmarkMoveOperation {
   index: number
 }
 
+export interface BookmarkTileRectLike {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
 export interface BackgroundFetchSizeCheck {
   allowed: boolean
   message?: string
@@ -79,6 +86,28 @@ export function buildMinimalBookmarkMoveOperations(
   }
 
   return operations
+}
+
+export function shouldInsertAfterBookmarkTile(
+  pointer: { x: number; y: number },
+  targetRect: BookmarkTileRectLike,
+  draggedRect?: BookmarkTileRectLike | null
+): boolean {
+  const targetCenterX = targetRect.left + targetRect.width / 2
+  const targetCenterY = targetRect.top + targetRect.height / 2
+  if (!draggedRect) {
+    return pointer.x > targetCenterX
+  }
+
+  const draggedCenterY = draggedRect.top + draggedRect.height / 2
+  const sameRowThreshold = Math.max(
+    6,
+    Math.min(targetRect.height, draggedRect.height) * 0.5
+  )
+  const sameRow = Math.abs(draggedCenterY - targetCenterY) <= sameRowThreshold
+  return sameRow
+    ? pointer.x > targetCenterX
+    : pointer.y > targetCenterY
 }
 
 function getLongestIncreasingSubsequenceIndexes(values: number[]): number[] {

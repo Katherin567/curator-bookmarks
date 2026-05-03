@@ -76,6 +76,7 @@ import {
   BACKGROUND_URL_MAX_BYTES,
   buildMinimalBookmarkMoveOperations,
   resolveRestorableBookmarkParentId,
+  shouldInsertAfterBookmarkTile,
   validateBackgroundBlobSize,
   validateBackgroundContentLength
 } from './interactions.js'
@@ -1531,6 +1532,10 @@ function getBookmarkInsertIndex(clientX: number, clientY: number): number {
   let closestTile: HTMLElement | null = null
   let closestDistance = Number.POSITIVE_INFINITY
   for (const tile of tiles) {
+    if (String(tile.dataset.bookmarkId || '') === state.draggingBookmarkId) {
+      continue
+    }
+
     const rect = tile.getBoundingClientRect()
     const centerX = rect.left + rect.width / 2
     const centerY = rect.top + rect.height / 2
@@ -1553,9 +1558,12 @@ function getBookmarkInsertIndex(clientX: number, clientY: number): number {
   }
 
   const rect = closestTile.getBoundingClientRect()
-  const insertAfter =
-    clientY > rect.top + rect.height / 2 ||
-    clientX > rect.left + rect.width / 2
+  const draggedRect = getActiveDragTile()?.getBoundingClientRect() || null
+  const insertAfter = shouldInsertAfterBookmarkTile(
+    { x: clientX, y: clientY },
+    rect,
+    draggedRect
+  )
   return targetIndex + (insertAfter ? 1 : 0)
 }
 
