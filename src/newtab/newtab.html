@@ -539,9 +539,16 @@
       class="newtab-dashboard-overlay"
       aria-label="书签仪表盘"
       aria-hidden="true"
+      data-dashboard-ready="false"
       hidden
     >
       <div class="newtab-dashboard-surface">
+        <div class="newtab-dashboard-loading" aria-hidden="true">
+          <div class="newtab-dashboard-loading-card">
+            <span class="newtab-dashboard-loading-mark"></span>
+            <span>正在打开书签仪表盘</span>
+          </div>
+        </div>
         <iframe
           id="newtab-dashboard-frame"
           class="newtab-dashboard-frame"

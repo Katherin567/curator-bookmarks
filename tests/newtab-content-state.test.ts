@@ -379,6 +379,8 @@ test('newtab exposes a lazy options dashboard iframe route', () => {
   assert.match(dashboardTrigger, />\s*书签仪表盘\s*<\/span>/)
   assert.match(dashboardOverlay, /\bhidden\b/)
   assert.match(dashboardOverlay, /aria-hidden="true"/)
+  assert.match(dashboardOverlay, /data-dashboard-ready="false"/)
+  assert.match(html, /class="newtab-dashboard-loading"/)
   assert.match(dashboardFrame, /loading="lazy"/)
   assert.match(dashboardFrame, /title="书签仪表盘"/)
   assert.doesNotMatch(html, /data-newtab-dashboard-root/)
@@ -391,6 +393,9 @@ test('newtab exposes a lazy options dashboard iframe route', () => {
   assert.match(script, /chrome\.runtime\.getURL\(/)
   assert.match(script, /window\.location\.hash === '#dashboard'/)
   assert.match(script, /addEventListener\(['"]message['"][\s\S]*curator:newtab-dashboard-close/)
+  assert.match(script, /curator:newtab-dashboard-ready/)
+  assert.match(script, /dashboardFrameReady/)
+  assert.match(script, /dashboardOverlay\.dataset\.dashboardReady/)
 
   for (const pattern of [
     /buildDashboardPanel/,
@@ -627,7 +632,12 @@ test('newtab dashboard glass layer only styles the iframe shell', () => {
   assert.match(newtabCss, /\.newtab-dashboard-surface\s*\{[\s\S]*?height:\s*100dvh/)
   assert.match(newtabCss, /\.newtab-dashboard-surface\s*\{[\s\S]*?border-radius:\s*0/)
   assert.match(newtabCss, /\.newtab-dashboard-surface\s*\{[\s\S]*?backdrop-filter:\s*blur\(/)
-  assert.match(newtabCss, /\.newtab-dashboard-frame\s*\{/)
+  assert.match(newtabCss, /\.newtab-dashboard-loading\s*\{[\s\S]*?position:\s*absolute/)
+  assert.match(newtabCss, /\.newtab-dashboard-loading-card\s*\{[\s\S]*?backdrop-filter:\s*blur\(/)
+  assert.match(newtabCss, /\.newtab-dashboard-frame\s*\{[\s\S]*?opacity:\s*0/)
+  assert.match(newtabCss, /\.newtab-dashboard-frame\s*\{[\s\S]*?visibility:\s*hidden/)
+  assert.match(newtabCss, /\.newtab-dashboard-overlay\[data-dashboard-ready="true"\]\s+\.newtab-dashboard-frame\s*\{[\s\S]*?opacity:\s*1/)
+  assert.match(newtabCss, /\.newtab-dashboard-overlay\[data-dashboard-ready="true"\]\s+\.newtab-dashboard-loading\s*\{[\s\S]*?opacity:\s*0/)
   assert.match(newtabCss, /\.dashboard-trigger\s*\{[\s\S]*?min-width:\s*124px/)
   assert.match(newtabCss, /\.dashboard-trigger span\s*\{[\s\S]*?white-space:\s*nowrap/)
   assert.match(newtabCss, /@media \(prefers-reduced-motion: reduce\)/)

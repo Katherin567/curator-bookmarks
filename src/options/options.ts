@@ -255,6 +255,7 @@ const IS_OPTIONS_DASHBOARD_EMBED_MODE =
 
 applyOptionsDashboardEmbedClasses()
 
+let newTabDashboardReadyPosted = false
 let availabilityRenderFrame = 0
 let availabilityDurationTimer = 0
 let aiNamingDurationTimer = 0
@@ -391,7 +392,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   void hydrateShortcutCommands()
 
   await hydratePersistentState()
-  await hydrateAvailabilityCatalog()
+  await hydrateAvailabilityCatalog({ analyzeFolderCleanup: !IS_OPTIONS_DASHBOARD_EMBED_MODE })
   await hydrateProbePermission()
   await hydrateAiNamingPermissionState()
   renderAvailabilitySection()
@@ -513,6 +514,27 @@ function exitDashboard(): void {
   }
 
   window.location.hash = '#general'
+}
+
+function notifyNewTabDashboardReady(): void {
+  if (
+    !IS_OPTIONS_DASHBOARD_EMBED_MODE ||
+    newTabDashboardReadyPosted ||
+    normalizeSectionKey(getCurrentSectionKey()) !== 'dashboard' ||
+    availabilityState.catalogLoading
+  ) {
+    return
+  }
+
+  newTabDashboardReadyPosted = true
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      window.parent.postMessage(
+        { type: 'curator:newtab-dashboard-ready' },
+        window.location.origin
+      )
+    })
+  })
 }
 
 function syncCollapsibleNavGroups(activeSectionKey) {
@@ -2400,6 +2422,7 @@ function renderActiveOptionsSection() {
 
   if (activeSection === 'dashboard') {
     renderDashboardSection()
+    notifyNewTabDashboardReady()
     return
   }
 

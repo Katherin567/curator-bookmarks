@@ -293,6 +293,7 @@ const state = {
   settingsSaveMessage: '',
   dashboardOpen: false,
   dashboardFrameLoaded: false,
+  dashboardFrameReady: false,
   searchOffsetBounds: { ...SEARCH_OFFSET_BOUNDS_FALLBACK } as AdaptiveSearchOffsetBounds,
   searchWidthBounds: { ...SEARCH_WIDTH_BOUNDS_FALLBACK },
   faviconRefreshTokens: new Map<string, number>()
@@ -2660,6 +2661,7 @@ function ensureDashboardFrameLoaded(): void {
     return
   }
 
+  state.dashboardFrameReady = false
   dashboardFrame.src = chrome.runtime.getURL('src/options/options.html?embed=newtab-dashboard#dashboard')
   state.dashboardFrameLoaded = true
 }
@@ -2671,6 +2673,7 @@ function renderDashboard(): void {
 
   dashboardOverlay.hidden = !state.dashboardOpen
   dashboardOverlay.setAttribute('aria-hidden', state.dashboardOpen ? 'false' : 'true')
+  dashboardOverlay.dataset.dashboardReady = state.dashboardFrameReady ? 'true' : 'false'
   dashboardTrigger?.setAttribute('aria-expanded', state.dashboardOpen ? 'true' : 'false')
 
   if (state.dashboardOpen) {
@@ -2689,6 +2692,12 @@ function handleDashboardMessage(event: MessageEvent): void {
 
   if (event.data?.type === 'curator:newtab-dashboard-close') {
     closeDashboardRoute()
+    return
+  }
+
+  if (event.data?.type === 'curator:newtab-dashboard-ready') {
+    state.dashboardFrameReady = true
+    renderDashboard()
   }
 }
 
