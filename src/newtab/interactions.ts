@@ -101,13 +101,7 @@ export function buildBookmarkOrderAfterInsert(
 
   const nextIds = [...currentIds]
   const [draggedBookmarkId] = nextIds.splice(currentIndex, 1)
-  const normalizedIndex = Math.max(
-    0,
-    Math.min(
-      currentIndex < insertIndex ? insertIndex - 1 : insertIndex,
-      nextIds.length
-    )
-  )
+  const normalizedIndex = Math.max(0, Math.min(insertIndex, nextIds.length))
 
   nextIds.splice(normalizedIndex, 0, draggedBookmarkId)
   return nextIds

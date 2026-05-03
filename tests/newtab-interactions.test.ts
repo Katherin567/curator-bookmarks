@@ -57,7 +57,15 @@ test('builds bookmark order after a pending drag insert without mutating input',
   const order = ['a', 'b', 'c', 'd']
 
   assert.deepEqual(
-    buildBookmarkOrderAfterInsert(order, 'b', 3),
+    buildBookmarkOrderAfterInsert(order, 'a', 1),
+    ['b', 'a', 'c', 'd']
+  )
+  assert.deepEqual(
+    buildBookmarkOrderAfterInsert(order, 'a', 2),
+    ['b', 'c', 'a', 'd']
+  )
+  assert.deepEqual(
+    buildBookmarkOrderAfterInsert(order, 'b', 2),
     ['a', 'c', 'b', 'd']
   )
   assert.deepEqual(
@@ -80,10 +88,6 @@ test('keeps bookmark order unchanged for invalid or same-slot pending inserts', 
   )
   assert.deepEqual(
     buildBookmarkOrderAfterInsert(order, 'b', 1),
-    order
-  )
-  assert.deepEqual(
-    buildBookmarkOrderAfterInsert(order, 'b', 2),
     order
   )
 })

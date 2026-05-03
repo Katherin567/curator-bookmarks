@@ -1479,9 +1479,11 @@ function getBookmarkInsertIndex(clientX: number, clientY: number): number {
     return -1
   }
 
-  const tiles = Array.from(document.querySelectorAll<HTMLElement>(
-    `.bookmark-tile[data-bookmark-id][data-folder-id="${CSS.escape(folderId)}"]`
-  ))
+  const tiles = Array
+    .from(document.querySelectorAll<HTMLElement>(
+      `.bookmark-tile[data-bookmark-id][data-folder-id="${CSS.escape(folderId)}"]`
+    ))
+    .filter((tile) => String(tile.dataset.bookmarkId || '') !== state.draggingBookmarkId)
   if (!tiles.length) {
     return -1
   }
@@ -1489,10 +1491,6 @@ function getBookmarkInsertIndex(clientX: number, clientY: number): number {
   let closestTile: HTMLElement | null = null
   let closestDistance = Number.POSITIVE_INFINITY
   for (const tile of tiles) {
-    if (String(tile.dataset.bookmarkId || '') === state.draggingBookmarkId) {
-      continue
-    }
-
     const rect = tile.getBoundingClientRect()
     const centerX = rect.left + rect.width / 2
     const centerY = rect.top + rect.height / 2
@@ -1507,9 +1505,7 @@ function getBookmarkInsertIndex(clientX: number, clientY: number): number {
     return -1
   }
 
-  const bookmarkId = String(closestTile.dataset.bookmarkId || '')
-  const targetIndex = getActiveBookmarkFolderBookmarks()
-    .findIndex((bookmark) => String(bookmark.id) === bookmarkId)
+  const targetIndex = tiles.indexOf(closestTile)
   if (targetIndex < 0) {
     return -1
   }
