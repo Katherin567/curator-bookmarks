@@ -328,6 +328,8 @@ let iconSettingsSaveTimer = 0
 let faviconAccentSaveTimer = 0
 let timeSettingsSaveTimer = 0
 let settingsSaveStatusTimer = 0
+let bookmarkDragSlotRects = new Map<string, DOMRect>()
+let bookmarkDragSlotOrderIds: string[] = []
 
 document.addEventListener('DOMContentLoaded', () => {
   bindEvents()
@@ -1255,8 +1257,9 @@ function beginBookmarkDrag(): void {
   document.body.classList.add('bookmark-dragging')
   const sourceTile = getActiveDragTile()
   createBookmarkDragGhost(sourceTile)
+  captureBookmarkDragLayout()
   sourceTile?.classList.add('dragging')
-  syncBookmarkDragPreviewOrder()
+  syncBookmarkDragVisualPreview()
 }
 
 function handleBookmarkPointerMove(event: PointerEvent): void {
@@ -1334,6 +1337,7 @@ function clearBookmarkDragState({ keepSuppressClick = false } = {}): void {
   state.dragOriginalOrderIds = []
   state.dragPendingInsertIndex = -1
   removeBookmarkDragGhost()
+  clearBookmarkDragVisualPreview()
   document.body.classList.remove('bookmark-dragging')
 
   if (keepSuppressClick) {
@@ -1451,10 +1455,8 @@ function setBookmarkDragPendingInsertIndex(insertIndex: number): void {
     return
   }
 
-  const previousRects = getBookmarkDragPreviewRects()
   state.dragPendingInsertIndex = nextInsertIndex
-  syncBookmarkDragPreviewOrder()
-  animateBookmarkDragPreviewShift(previousRects)
+  syncBookmarkDragVisualPreview()
 }
 
 function getActiveBookmarkFolderSection(): NewTabFolderSection | null {
@@ -1485,41 +1487,36 @@ function getBookmarkInsertIndex(clientX: number, clientY: number): number {
     return -1
   }
 
-  const tiles = Array
-    .from(document.querySelectorAll<HTMLElement>(
-      `.bookmark-tile[data-bookmark-id][data-folder-id="${CSS.escape(folderId)}"]`
-    ))
-    .filter((tile) => String(tile.dataset.bookmarkId || '') !== state.draggingBookmarkId)
-  if (!tiles.length) {
+  const candidates = getBookmarkDragLayoutCandidates()
+  if (!candidates.length) {
     return -1
   }
 
-  let closestTile: HTMLElement | null = null
+  let closestCandidate: { id: string; rect: DOMRect } | null = null
   let closestDistance = Number.POSITIVE_INFINITY
-  for (const tile of tiles) {
-    const rect = tile.getBoundingClientRect()
+  for (const candidate of candidates) {
+    const rect = candidate.rect
     const centerX = rect.left + rect.width / 2
     const centerY = rect.top + rect.height / 2
     const distance = (clientX - centerX) ** 2 + (clientY - centerY) ** 2
     if (distance < closestDistance) {
       closestDistance = distance
-      closestTile = tile
+      closestCandidate = candidate
     }
   }
 
-  if (!closestTile) {
+  if (!closestCandidate) {
     return -1
   }
 
-  const targetIndex = tiles.indexOf(closestTile)
+  const targetIndex = candidates.indexOf(closestCandidate)
   if (targetIndex < 0) {
     return -1
   }
 
-  const rect = closestTile.getBoundingClientRect()
   const insertAfter = shouldInsertAfterBookmarkTile(
     { x: clientX, y: clientY },
-    rect
+    closestCandidate.rect
   )
   return targetIndex + (insertAfter ? 1 : 0)
 }
@@ -1551,16 +1548,64 @@ function getPreviewBookmarkOrderIds(): string[] {
   )
 }
 
-function syncBookmarkDragPreviewOrder(): void {
-  const section = getActiveBookmarkFolderSection()
-  if (!section) {
+function captureBookmarkDragLayout(): void {
+  bookmarkDragSlotRects = new Map()
+  bookmarkDragSlotOrderIds = []
+  const grid = getActiveBookmarkGrid()
+  if (!grid) {
     return
   }
 
-  const grid = document.querySelector<HTMLElement>(
+  for (const tile of grid.querySelectorAll<HTMLElement>(':scope > .bookmark-tile[data-bookmark-id]')) {
+    const bookmarkId = String(tile.dataset.bookmarkId || '')
+    if (!bookmarkId) {
+      continue
+    }
+    bookmarkDragSlotOrderIds.push(bookmarkId)
+    bookmarkDragSlotRects.set(bookmarkId, tile.getBoundingClientRect())
+  }
+}
+
+function getActiveBookmarkGrid(): HTMLElement | null {
+  const section = getActiveBookmarkFolderSection()
+  if (!section) {
+    return null
+  }
+
+  return document.querySelector<HTMLElement>(
     `.bookmark-grid[data-bookmark-grid-folder-id="${CSS.escape(section.id)}"]`
   )
+}
+
+function getBookmarkDragLayoutCandidates(): Array<{ id: string; rect: DOMRect }> {
+  if (bookmarkDragSlotOrderIds.length && bookmarkDragSlotRects.size) {
+    return bookmarkDragSlotOrderIds
+      .filter((bookmarkId) => bookmarkId !== state.draggingBookmarkId)
+      .map((bookmarkId) => {
+        const rect = bookmarkDragSlotRects.get(bookmarkId)
+        return rect ? { id: bookmarkId, rect } : null
+      })
+      .filter((candidate): candidate is { id: string; rect: DOMRect } => Boolean(candidate))
+  }
+
+  const grid = getActiveBookmarkGrid()
   if (!grid) {
+    return []
+  }
+
+  return Array
+    .from(grid.querySelectorAll<HTMLElement>(':scope > .bookmark-tile[data-bookmark-id]'))
+    .filter((tile) => String(tile.dataset.bookmarkId || '') !== state.draggingBookmarkId)
+    .map((tile) => ({
+      id: String(tile.dataset.bookmarkId || ''),
+      rect: tile.getBoundingClientRect()
+    }))
+    .filter((candidate) => candidate.id)
+}
+
+function syncBookmarkDragVisualPreview(): void {
+  const grid = getActiveBookmarkGrid()
+  if (!grid || !bookmarkDragSlotOrderIds.length) {
     return
   }
 
@@ -1572,86 +1617,55 @@ function syncBookmarkDragPreviewOrder(): void {
     }
   }
 
-  const orderedTiles: HTMLElement[] = []
-  for (const bookmarkId of getPreviewBookmarkOrderIds()) {
-    const tile = tileByBookmarkId.get(bookmarkId)
-    if (!tile) {
+  const targetSlotByBookmarkId = new Map<string, DOMRect>()
+  const targetOrderIds = getPreviewBookmarkOrderIds()
+  if (targetOrderIds.length !== bookmarkDragSlotOrderIds.length) {
+    return
+  }
+
+  for (let index = 0; index < targetOrderIds.length; index += 1) {
+    const slotBookmarkId = bookmarkDragSlotOrderIds[index]
+    const targetRect = bookmarkDragSlotRects.get(slotBookmarkId)
+    if (!targetRect) {
       return
     }
-    orderedTiles.push(tile)
+    targetSlotByBookmarkId.set(targetOrderIds[index], targetRect)
   }
 
-  if (orderedTiles.length !== tileByBookmarkId.size) {
-    return
+  for (const bookmarkId of getPreviewBookmarkOrderIds()) {
+    const tile = tileByBookmarkId.get(bookmarkId)
+    const originalRect = bookmarkDragSlotRects.get(bookmarkId)
+    const targetRect = targetSlotByBookmarkId.get(bookmarkId)
+    if (!tile || !originalRect || !targetRect) {
+      continue
+    }
+
+    const deltaX = targetRect.left - originalRect.left
+    const deltaY = targetRect.top - originalRect.top
+    const isDraggedTile = bookmarkId === state.draggingBookmarkId
+    tile.style.transform = buildBookmarkPreviewTransform(deltaX, deltaY, isDraggedTile)
+    tile.style.zIndex = isDraggedTile ? '1' : ''
   }
 
-  const currentOrderIds = Array
-    .from(grid.querySelectorAll<HTMLElement>(':scope > .bookmark-tile[data-bookmark-id]'))
-    .map((tile) => String(tile.dataset.bookmarkId || ''))
-  const nextOrderIds = orderedTiles.map((tile) => String(tile.dataset.bookmarkId || ''))
-  if (areStringArraysEqual(currentOrderIds, nextOrderIds)) {
-    return
-  }
-
-  for (const tile of orderedTiles) {
-    grid.appendChild(tile)
-  }
 }
 
-function getBookmarkDragPreviewRects(): Map<string, DOMRect> {
-  const rects = new Map<string, DOMRect>()
-  if (!state.draggingBookmarkFolderId) {
-    return rects
+function buildBookmarkPreviewTransform(deltaX: number, deltaY: number, isDraggedTile: boolean): string {
+  const hasOffset = Math.abs(deltaX) >= 0.5 || Math.abs(deltaY) >= 0.5
+  if (!hasOffset) {
+    return isDraggedTile ? 'scale(0.92)' : ''
   }
 
-  for (const tile of document.querySelectorAll<HTMLElement>(
-    `.bookmark-tile[data-bookmark-id][data-folder-id="${CSS.escape(state.draggingBookmarkFolderId)}"]`
-  )) {
-    const bookmarkId = String(tile.dataset.bookmarkId || '')
-    if (bookmarkId) {
-      rects.set(bookmarkId, tile.getBoundingClientRect())
-    }
-  }
-
-  return rects
+  const translate = `translate3d(${deltaX}px, ${deltaY}px, 0)`
+  return isDraggedTile ? `${translate} scale(0.92)` : translate
 }
 
-function animateBookmarkDragPreviewShift(previousRects: Map<string, DOMRect>): void {
-  if (!previousRects.size || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    return
+function clearBookmarkDragVisualPreview(): void {
+  for (const tile of document.querySelectorAll<HTMLElement>('.bookmark-tile[data-bookmark-id]')) {
+    tile.style.transform = ''
+    tile.style.zIndex = ''
   }
-
-  for (const tile of document.querySelectorAll<HTMLElement>(
-    `.bookmark-tile[data-bookmark-id][data-folder-id="${CSS.escape(state.draggingBookmarkFolderId)}"]`
-  )) {
-    const bookmarkId = String(tile.dataset.bookmarkId || '')
-    if (!bookmarkId || bookmarkId === state.draggingBookmarkId) {
-      continue
-    }
-
-    const previousRect = previousRects.get(bookmarkId)
-    if (!previousRect) {
-      continue
-    }
-
-    const currentRect = tile.getBoundingClientRect()
-    const deltaX = previousRect.left - currentRect.left
-    const deltaY = previousRect.top - currentRect.top
-    if (Math.abs(deltaX) < 0.5 && Math.abs(deltaY) < 0.5) {
-      continue
-    }
-
-    tile.animate(
-      [
-        { transform: `translate3d(${deltaX}px, ${deltaY}px, 0)` },
-        { transform: 'translate3d(0, 0, 0)' }
-      ],
-      {
-        duration: 150,
-        easing: 'cubic-bezier(0.22, 0.72, 0.18, 1)'
-      }
-    )
-  }
+  bookmarkDragSlotRects = new Map()
+  bookmarkDragSlotOrderIds = []
 }
 
 function applyDraggedBookmarkInsertInState(insertIndex: number): string[] {

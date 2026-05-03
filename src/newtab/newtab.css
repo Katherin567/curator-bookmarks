@@ -1274,12 +1274,13 @@ body.folder-names-hidden.folder-order-dragging .folder-section-header-row {
 
 .bookmark-tile.dragging {
   opacity: 0.48;
-  transform: scale(0.92);
   cursor: default;
 }
 
 body.bookmark-dragging .bookmark-tile:not(.dragging) {
-  transition: none;
+  transition:
+    transform 150ms cubic-bezier(0.22, 0.72, 0.18, 1),
+    opacity var(--ease-standard);
 }
 
 body.bookmark-dragging .bookmark-tile:not(.dragging):hover,
