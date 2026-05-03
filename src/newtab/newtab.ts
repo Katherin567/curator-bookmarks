@@ -43,6 +43,7 @@ import {
   getNewTabSourceAnchorId,
   getSearchBookmarkSuggestionsFromIndex,
   getAdaptiveSearchOffsetBounds,
+  getAdaptiveSearchWidthBounds,
   getVerticalCenterCollisionOffset,
   resolvePortalPanelLayout,
   type AdaptiveSearchOffsetBounds,
@@ -149,6 +150,7 @@ const DEFAULT_SEARCH_SETTINGS = {
 const SEARCH_OFFSET_BOUNDS_FALLBACK: AdaptiveSearchOffsetBounds = { min: -32, max: 72 }
 const SEARCH_OFFSET_ABSOLUTE_MIN = -240
 const SEARCH_OFFSET_ABSOLUTE_MAX = 240
+const SEARCH_WIDTH_BOUNDS_FALLBACK = { min: 16, max: 72 }
 const NEWTAB_LAYOUT_SAFE_GAP = 12
 const SEARCH_SUGGESTION_LIMIT = 6
 const QUICK_ACCESS_ITEM_LIMIT = 8
@@ -292,6 +294,7 @@ const state = {
   dashboardOpen: false,
   dashboardFrameLoaded: false,
   searchOffsetBounds: { ...SEARCH_OFFSET_BOUNDS_FALLBACK } as AdaptiveSearchOffsetBounds,
+  searchWidthBounds: { ...SEARCH_WIDTH_BOUNDS_FALLBACK },
   faviconRefreshTokens: new Map<string, number>()
 }
 
@@ -317,6 +320,7 @@ let deferredRenderFrame = 0
 let settingsDrawerReturnFocusElement: HTMLElement | null = null
 let deferredRenderClockUpdate = false
 let searchSettingsSaveTimer = 0
+let searchSettingsSettleTimer = 0
 let iconSettingsSaveTimer = 0
 let faviconAccentSaveTimer = 0
 let timeSettingsSaveTimer = 0
@@ -634,10 +638,14 @@ function bindSearchSettingsEvents(): void {
     input.addEventListener('change', handleSearchSettingsChange)
   })
   document.getElementById('search-placeholder')?.addEventListener('input', handleSearchSettingsChange)
-  document.getElementById('search-width')?.addEventListener('input', handleSearchSettingsChange)
-  document.getElementById('search-height')?.addEventListener('input', handleSearchSettingsChange)
-  document.getElementById('search-offset-y')?.addEventListener('input', handleSearchSettingsChange)
-  document.getElementById('search-background')?.addEventListener('input', handleSearchSettingsChange)
+  document.getElementById('search-width')?.addEventListener('input', handleSearchSettingsPreview)
+  document.getElementById('search-height')?.addEventListener('input', handleSearchSettingsPreview)
+  document.getElementById('search-offset-y')?.addEventListener('input', handleSearchSettingsPreview)
+  document.getElementById('search-background')?.addEventListener('input', handleSearchSettingsPreview)
+  document.getElementById('search-width')?.addEventListener('change', handleSearchSettingsCommit)
+  document.getElementById('search-height')?.addEventListener('change', handleSearchSettingsCommit)
+  document.getElementById('search-offset-y')?.addEventListener('change', handleSearchSettingsCommit)
+  document.getElementById('search-background')?.addEventListener('change', handleSearchSettingsCommit)
 }
 
 function bindIconSettingsEvents(): void {
@@ -854,6 +862,45 @@ function handleSearchSettingsChange(): void {
   scheduleSearchSettingsSave()
   scheduleRender({ updateClock: true })
   syncSearchSettingsControls()
+}
+
+function handleSearchSettingsPreview(): void {
+  state.searchSettings = readSearchSettingsFromControls()
+  scheduleSearchSettingsSave()
+  applySearchSettingsLive()
+  syncSearchSettingsControls()
+  scheduleSearchSettingsSettle()
+}
+
+function handleSearchSettingsCommit(): void {
+  state.searchSettings = readSearchSettingsFromControls()
+  scheduleSearchSettingsSave()
+  scheduleRender({ updateClock: true })
+}
+
+function applySearchSettingsLive(): void {
+  const settings = state.searchSettings
+  const widthBounds = state.searchWidthBounds || SEARCH_WIDTH_BOUNDS_FALLBACK
+  const offsetBounds = state.searchOffsetBounds || SEARCH_OFFSET_BOUNDS_FALLBACK
+  const slot = root?.querySelector<HTMLElement>('.newtab-search-slot')
+  const form = slot?.querySelector<HTMLElement>('.newtab-search')
+  const width = clampNumber(settings.width, widthBounds.min, widthBounds.max, DEFAULT_SEARCH_SETTINGS.width)
+  const offsetY = clampNumber(settings.offsetY, offsetBounds.min, offsetBounds.max, DEFAULT_SEARCH_SETTINGS.offsetY)
+
+  slot?.style.setProperty('--search-width', `${width}vw`)
+  slot?.style.setProperty('--search-height', `${settings.height}px`)
+  slot?.style.setProperty('--search-offset-y', `${offsetY}px`)
+  form?.style.setProperty('--search-width', `${width}vw`)
+  form?.style.setProperty('--search-height', `${settings.height}px`)
+  form?.style.setProperty('--search-bg-alpha', String(settings.background / 100))
+}
+
+function scheduleSearchSettingsSettle(): void {
+  window.clearTimeout(searchSettingsSettleTimer)
+  searchSettingsSettleTimer = window.setTimeout(() => {
+    searchSettingsSettleTimer = 0
+    scheduleAdaptiveNewTabLayoutUpdate()
+  }, SETTINGS_SAVE_DEBOUNCE_MS)
 }
 
 function handleBackgroundSettingsChange(): void {
@@ -2727,11 +2774,15 @@ function updateAdaptiveSearchOffsetBounds(): void {
   const slot = page?.querySelector<HTMLElement>('.newtab-search-slot')
   if (!page || !slot) {
     state.searchOffsetBounds = { ...SEARCH_OFFSET_BOUNDS_FALLBACK }
+    state.searchWidthBounds = { ...SEARCH_WIDTH_BOUNDS_FALLBACK }
+    syncSearchWidthControl()
     syncSearchOffsetControl()
     return
   }
 
   const shellRect = root?.getBoundingClientRect()
+  const viewportWidth = document.documentElement.clientWidth || window.innerWidth || 1280
+  const slotRect = slot.getBoundingClientRect()
   const searchRect = slot.getBoundingClientRect()
   const previousModule = slot.previousElementSibling instanceof HTMLElement
     ? slot.previousElementSibling
@@ -2754,12 +2805,22 @@ function updateAdaptiveSearchOffsetBounds(): void {
     absoluteMin: SEARCH_OFFSET_ABSOLUTE_MIN,
     absoluteMax: SEARCH_OFFSET_ABSOLUTE_MAX
   })
+  const widthBounds = getAdaptiveSearchWidthBounds({
+    viewportWidth,
+    containerWidth: slotRect.width
+  })
 
   state.searchOffsetBounds = bounds
+  state.searchWidthBounds = widthBounds
+  slot.style.setProperty(
+    '--search-width',
+    `${clampNumber(state.searchSettings.width, widthBounds.min, widthBounds.max, DEFAULT_SEARCH_SETTINGS.width)}vw`
+  )
   slot.style.setProperty(
     '--search-offset-y',
     `${clampNumber(state.searchSettings.offsetY, bounds.min, bounds.max, DEFAULT_SEARCH_SETTINGS.offsetY)}px`
   )
+  syncSearchWidthControl()
   syncSearchOffsetControl()
 }
 
@@ -5603,10 +5664,7 @@ function syncSearchSettingsControls(): void {
     placeholderInput.value = settings.placeholder
     placeholderInput.disabled = !settings.enabled
   }
-  if (widthInput instanceof HTMLInputElement) {
-    widthInput.value = String(settings.width)
-    widthInput.disabled = !settings.enabled
-  }
+  syncSearchWidthControl()
   if (heightInput instanceof HTMLInputElement) {
     heightInput.value = String(settings.height)
     heightInput.disabled = !settings.enabled
@@ -5617,7 +5675,6 @@ function syncSearchSettingsControls(): void {
     backgroundInput.disabled = !settings.enabled
   }
 
-  setTextContent('search-width-value', `${settings.width}vw`)
   setTextContent('search-height-value', `${settings.height}px`)
   setTextContent('search-background-value', `${settings.background}%`)
 
@@ -5627,6 +5684,25 @@ function syncSearchSettingsControls(): void {
       : null
     row?.classList.toggle('setting-row-disabled', !settings.enabled)
   }
+}
+
+function syncSearchWidthControl(): void {
+  const widthInput = document.getElementById('search-width')
+  const bounds = state.searchWidthBounds || SEARCH_WIDTH_BOUNDS_FALLBACK
+  const value = clampNumber(
+    state.searchSettings.width,
+    bounds.min,
+    bounds.max,
+    DEFAULT_SEARCH_SETTINGS.width
+  )
+  if (widthInput instanceof HTMLInputElement) {
+    widthInput.min = String(bounds.min)
+    widthInput.max = String(bounds.max)
+    widthInput.value = String(value)
+    widthInput.disabled = !state.searchSettings.enabled
+    updateSettingRangeVisual(widthInput)
+  }
+  setTextContent('search-width-value', `${value}vw`)
 }
 
 function syncSearchOffsetControl(): void {

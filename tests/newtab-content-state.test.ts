@@ -11,6 +11,7 @@ import {
   getPortalQuickAccessItems,
   resolvePortalPanelLayout,
   getAdaptiveSearchOffsetBounds,
+  getAdaptiveSearchWidthBounds,
   getVerticalCenterCollisionOffset
 } from '../src/newtab/content-state.js'
 
@@ -93,6 +94,41 @@ test('adaptive newtab search offset clamps saved positions away from centered bo
   }), {
     min: -14,
     max: 84
+  })
+})
+
+test('adaptive newtab search offset keeps a usable range in overconstrained layouts', () => {
+  assert.deepEqual(getAdaptiveSearchOffsetBounds({
+    currentOffsetY: 80,
+    searchTop: 190,
+    searchBottom: 224,
+    viewportTop: 20,
+    viewportBottom: 230,
+    previousModuleBottom: 210,
+    primaryContentTop: 205
+  }), {
+    min: 68,
+    max: 92
+  })
+})
+
+test('adaptive newtab search width removes dead range past the available slot width', () => {
+  assert.deepEqual(getAdaptiveSearchWidthBounds({
+    viewportWidth: 1280,
+    containerWidth: 540
+  }), {
+    min: 16,
+    max: 42
+  })
+})
+
+test('adaptive newtab search width keeps enough range for the minimum pixel width', () => {
+  assert.deepEqual(getAdaptiveSearchWidthBounds({
+    viewportWidth: 390,
+    containerWidth: 180
+  }), {
+    min: 16,
+    max: 57
   })
 })
 
@@ -303,10 +339,20 @@ test('newtab search vertical offset uses adaptive runtime bounds', () => {
   assert.match(offsetInput, /max="240"/)
   assert.match(css, /margin-top:\s*var\(--search-offset-y\)/)
   assert.doesNotMatch(css, /margin-top:\s*max\(var\(--search-offset-y\)/)
+  assert.doesNotMatch(getCssRuleBody(css, '.newtab-search-slot'), /transition:\s*margin-top/)
   assert.match(source, /getAdaptiveSearchOffsetBounds\(/)
+  assert.match(source, /getAdaptiveSearchWidthBounds\(/)
   assert.match(source, /offsetY:\s*clampNumber\(\s*settings\.offsetY,\s*SEARCH_OFFSET_ABSOLUTE_MIN,\s*SEARCH_OFFSET_ABSOLUTE_MAX,\s*DEFAULT_SEARCH_SETTINGS\.offsetY\s*\)/)
+  assert.match(source, /document\.getElementById\('search-offset-y'\)\?\.addEventListener\('input', handleSearchSettingsPreview\)/)
+  assert.match(source, /function applySearchSettingsLive\(\): void/)
+  assert.match(source, /slot\?\.style\.setProperty\('--search-offset-y'/)
+  assert.match(source, /function scheduleSearchSettingsSettle\(\): void/)
+  assert.match(source, /document\.getElementById\('search-offset-y'\)\?\.addEventListener\('change', handleSearchSettingsCommit\)/)
+  assert.match(source, /widthInput\.max\s*=\s*String\(bounds\.max\)/)
   assert.match(source, /offsetYInput\.min\s*=\s*String\(bounds\.min\)/)
   assert.match(source, /offsetYInput\.max\s*=\s*String\(bounds\.max\)/)
+  const previewBody = source.match(/function handleSearchSettingsPreview\(\): void \{([\s\S]*?)\n\}/)?.[1] || ''
+  assert.doesNotMatch(previewBody, /scheduleRender/)
 })
 
 test('newtab search width setting controls the actual form and overlay width', () => {

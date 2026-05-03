@@ -356,7 +356,6 @@ body.background-mask-enabled .newtab-background-mask {
   height: var(--search-height);
   justify-self: center;
   margin-top: var(--search-offset-y);
-  transition: margin-top var(--ease-standard);
 }
 
 .newtab-search {

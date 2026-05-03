@@ -148,6 +148,7 @@ export interface AdaptiveSearchOffsetBoundsInput {
   previousModuleBottom?: number
   primaryContentTop?: number
   minimumGap?: number
+  minimumRange?: number
   absoluteMin?: number
   absoluteMax?: number
 }
@@ -157,10 +158,22 @@ export interface AdaptiveSearchOffsetBounds {
   max: number
 }
 
+export interface AdaptiveSearchWidthBoundsInput {
+  viewportWidth: number
+  containerWidth: number
+  minWidthVw?: number
+  maxWidthVw?: number
+  minWidthPx?: number
+}
+
 const DEFAULT_VERTICAL_CENTER_COLLISION_GAP = 12
 const DEFAULT_ADAPTIVE_SEARCH_OFFSET_GAP = 12
+const DEFAULT_ADAPTIVE_SEARCH_OFFSET_MINIMUM_RANGE = 24
 const DEFAULT_ADAPTIVE_SEARCH_OFFSET_MIN = -240
 const DEFAULT_ADAPTIVE_SEARCH_OFFSET_MAX = 240
+const DEFAULT_ADAPTIVE_SEARCH_WIDTH_MIN_VW = 16
+const DEFAULT_ADAPTIVE_SEARCH_WIDTH_MAX_VW = 72
+const DEFAULT_ADAPTIVE_SEARCH_WIDTH_MIN_PX = 220
 
 export function getVerticalCenterCollisionOffset({
   utilityBottom,
@@ -184,6 +197,7 @@ export function getAdaptiveSearchOffsetBounds({
   previousModuleBottom,
   primaryContentTop,
   minimumGap = DEFAULT_ADAPTIVE_SEARCH_OFFSET_GAP,
+  minimumRange = DEFAULT_ADAPTIVE_SEARCH_OFFSET_MINIMUM_RANGE,
   absoluteMin = DEFAULT_ADAPTIVE_SEARCH_OFFSET_MIN,
   absoluteMax = DEFAULT_ADAPTIVE_SEARCH_OFFSET_MAX
 }: AdaptiveSearchOffsetBoundsInput): AdaptiveSearchOffsetBounds {
@@ -218,8 +232,33 @@ export function getAdaptiveSearchOffsetBounds({
   const max = Math.min(maxBound, Math.max(minBound, measuredMax))
   if (max < min) {
     const fallback = Math.min(maxBound, Math.max(minBound, currentOffset))
-    return { min: fallback, max: fallback }
+    const halfRange = Math.max(1, Math.ceil(minimumRange / 2))
+    return {
+      min: Math.max(minBound, fallback - halfRange),
+      max: Math.min(maxBound, fallback + halfRange)
+    }
   }
+
+  return { min, max }
+}
+
+export function getAdaptiveSearchWidthBounds({
+  viewportWidth,
+  containerWidth,
+  minWidthVw = DEFAULT_ADAPTIVE_SEARCH_WIDTH_MIN_VW,
+  maxWidthVw = DEFAULT_ADAPTIVE_SEARCH_WIDTH_MAX_VW,
+  minWidthPx = DEFAULT_ADAPTIVE_SEARCH_WIDTH_MIN_PX
+}: AdaptiveSearchWidthBoundsInput): { min: number; max: number } {
+  const min = Math.max(1, Math.floor(Math.min(minWidthVw, maxWidthVw)))
+  const absoluteMax = Math.max(min, Math.ceil(Math.max(minWidthVw, maxWidthVw)))
+  const safeViewportWidth = Math.max(1, viewportWidth)
+  const safeContainerWidth = Math.max(0, containerWidth)
+  const minWidthPercent = Math.ceil((Math.max(0, minWidthPx) / safeViewportWidth) * 100)
+  const availableWidthPercent = Math.floor((safeContainerWidth / safeViewportWidth) * 100)
+  const max = Math.min(
+    absoluteMax,
+    Math.max(min, minWidthPercent, availableWidthPercent)
+  )
 
   return { min, max }
 }
