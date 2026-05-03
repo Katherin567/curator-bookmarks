@@ -5,7 +5,7 @@
 <h1 align="center">Curator Bookmark</h1>
 
 <p align="center">
-  本地优先的 Chrome 书签管理扩展，用于搜索、整理、备份、清理和重新组织浏览器书签。
+  本地优先的 Chrome 书签管理扩展，用于搜索、整理、备份、清理和重新组织浏览器书签。项目暂未完善，成熟之时上架chrome扩展商店
 </p>
 
 <p align="center">
