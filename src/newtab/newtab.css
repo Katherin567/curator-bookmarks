@@ -764,10 +764,10 @@ body.background-mask-enabled .newtab-background-mask {
 .newtab-dashboard-surface {
   position: relative;
   display: grid;
-  width: min(1180px, 100%);
+  width: min(2200px, 100%);
   min-width: 0;
-  height: min(760px, calc(100vh - 96px));
-  min-height: 520px;
+  height: min(1040px, calc(100vh - 64px));
+  min-height: min(760px, calc(100vh - 64px));
   overflow: hidden;
   border: 1px solid rgba(245, 245, 247, 0.12);
   border-radius: 8px;
