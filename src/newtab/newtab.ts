@@ -68,11 +68,6 @@ import {
   validateBackgroundContentLength
 } from './interactions.js'
 import {
-  getBrowserQuickShortcuts,
-  normalizeBrowserQuickShortcutsVisible,
-  type BrowserQuickShortcut
-} from './quick-shortcuts.js'
-import {
   DEFAULT_ENABLED_SEARCH_ENGINE_IDS,
   SEARCH_ENGINE_CONFIG_BY_ID,
   SEARCH_MULTI_OPEN_LIMIT,
@@ -125,7 +120,6 @@ const DEFAULT_GENERAL_SETTINGS = {
   hideSettingsTrigger: false,
   showPortalOverview: true,
   showQuickAccess: true,
-  showBrowserShortcuts: true,
   showSourceNavigation: true
 }
 const DEFAULT_TIME_SETTINGS = {
@@ -642,9 +636,6 @@ function bindGeneralSettingsEvents(): void {
     ?.addEventListener('change', handleGeneralSettingsChange)
   document
     .getElementById('general-show-quick-access')
-    ?.addEventListener('change', handleGeneralSettingsChange)
-  document
-    .getElementById('general-show-browser-shortcuts')
     ?.addEventListener('change', handleGeneralSettingsChange)
 }
 
@@ -3169,18 +3160,16 @@ function createFolderAddButton(section: NewTabFolderSection): HTMLButtonElement 
 function createPortalPanel(): HTMLElement | null {
   const showOverview = state.generalSettings.showPortalOverview
   const showQuickAccess = state.generalSettings.showQuickAccess
-  const showBrowserShortcuts = state.generalSettings.showBrowserShortcuts
   const overview = buildNewTabPortalOverview({
     sections: state.folderSections,
     activityRecords: state.activity.records,
     now: Date.now()
   })
   const quickAccess = createQuickAccessPanel()
-  const browserShortcuts = createBrowserShortcutPanel()
   const layout = resolvePortalPanelLayout({
     showOverview,
     hasOverviewSignal: hasPortalOverviewSignal(overview),
-    hasQuickAccess: Boolean(quickAccess || browserShortcuts)
+    hasQuickAccess: Boolean(quickAccess)
   })
 
   if (layout === 'hidden') {
@@ -3194,16 +3183,11 @@ function createPortalPanel(): HTMLElement | null {
   if (layout === 'full' || layout === 'overview-only') {
     panel.appendChild(createPortalOverview(overview, {
       showQuickAccess,
-      showBrowserShortcuts,
-      hasQuickAccess: Boolean(quickAccess),
-      hasBrowserShortcuts: Boolean(browserShortcuts)
+      hasQuickAccess: Boolean(quickAccess)
     }))
   }
   if (quickAccess) {
     panel.appendChild(quickAccess)
-  }
-  if (browserShortcuts) {
-    panel.appendChild(browserShortcuts)
   }
 
   return panel
@@ -3217,9 +3201,7 @@ function createPortalOverview(
   overview: PortalOverview,
   options: {
     showQuickAccess: boolean
-    showBrowserShortcuts: boolean
     hasQuickAccess: boolean
-    hasBrowserShortcuts: boolean
   }
 ): HTMLElement {
   const section = document.createElement('section')
@@ -3254,16 +3236,11 @@ function createPortalSummaryText(
   overview: PortalOverview,
   options: {
     showQuickAccess: boolean
-    showBrowserShortcuts: boolean
     hasQuickAccess: boolean
-    hasBrowserShortcuts: boolean
   }
 ): string {
   if (options.hasQuickAccess) {
-    return options.hasBrowserShortcuts ? '书签和浏览器入口已整理' : '常用和最近入口已整理'
-  }
-  if (options.hasBrowserShortcuts) {
-    return '浏览器快捷入口已整理'
+    return '常用和最近入口已整理'
   }
 
   if (overview.addedTodayCount > 0) {
@@ -3323,74 +3300,6 @@ function createQuickAccessPanel(): HTMLElement | null {
   }
 
   return panel
-}
-
-function createBrowserShortcutPanel(): HTMLElement | null {
-  const shortcuts = getBrowserQuickShortcuts(state.generalSettings.showBrowserShortcuts)
-  if (!shortcuts.length) {
-    return null
-  }
-
-  const panel = document.createElement('section')
-  panel.className = 'newtab-browser-shortcuts'
-  panel.setAttribute('aria-label', '浏览器快捷入口')
-  panel.appendChild(createBrowserShortcutGroup('工具', shortcuts))
-  return panel
-}
-
-function createBrowserShortcutGroup(label: string, shortcuts: BrowserQuickShortcut[]): HTMLElement {
-  const group = document.createElement('section')
-  group.className = 'newtab-quick-group newtab-browser-shortcut-group'
-  group.setAttribute('aria-label', `${label}快捷入口`)
-
-  const header = document.createElement('div')
-  header.className = 'newtab-quick-heading'
-  header.textContent = label
-
-  const list = document.createElement('div')
-  list.className = 'newtab-quick-list newtab-browser-shortcut-list'
-
-  for (const shortcut of shortcuts) {
-    list.appendChild(createBrowserShortcutLink(shortcut))
-  }
-
-  group.append(header, list)
-  return group
-}
-
-function createBrowserShortcutLink(shortcut: BrowserQuickShortcut): HTMLAnchorElement {
-  const link = document.createElement('a')
-  link.className = 'newtab-quick-link newtab-browser-shortcut-link'
-  link.href = shortcut.url
-  link.title = `${shortcut.label} · ${shortcut.detail}`
-  link.draggable = false
-  link.dataset.browserShortcutId = shortcut.id
-  link.addEventListener('click', (event) => {
-    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) {
-      return
-    }
-
-    event.preventDefault()
-    window.location.assign(shortcut.url)
-  })
-
-  const mark = document.createElement('span')
-  mark.className = 'newtab-quick-mark'
-  mark.textContent = shortcut.badge
-  mark.setAttribute('aria-hidden', 'true')
-
-  const copy = document.createElement('span')
-  copy.className = 'newtab-quick-copy'
-
-  const title = document.createElement('strong')
-  title.textContent = shortcut.label
-
-  const detail = document.createElement('span')
-  detail.textContent = shortcut.detail
-
-  copy.append(title, detail)
-  link.append(mark, copy)
-  return link
 }
 
 function createQuickAccessItemFromPortalItem(item: PortalQuickAccessItem): QuickAccessItem | null {
@@ -5158,7 +5067,6 @@ function normalizeGeneralSettings(rawSettings: unknown): typeof DEFAULT_GENERAL_
     showQuickAccess: typeof settings.showQuickAccess === 'boolean'
       ? settings.showQuickAccess
       : legacyQuickAccess,
-    showBrowserShortcuts: normalizeBrowserQuickShortcutsVisible(settings.showBrowserShortcuts),
     showSourceNavigation: settings.showSourceNavigation !== false
   }
 }
@@ -5167,7 +5075,6 @@ function readGeneralSettingsFromControls(): typeof DEFAULT_GENERAL_SETTINGS {
   const hideInput = document.getElementById('general-hide-settings-trigger')
   const showOverviewInput = document.getElementById('general-show-overview')
   const showQuickAccessInput = document.getElementById('general-show-quick-access')
-  const showBrowserShortcutsInput = document.getElementById('general-show-browser-shortcuts')
   const showSourceNavigationInput = document.getElementById('folder-show-source-navigation')
 
   return normalizeGeneralSettings({
@@ -5180,9 +5087,6 @@ function readGeneralSettingsFromControls(): typeof DEFAULT_GENERAL_SETTINGS {
     showQuickAccess: showQuickAccessInput instanceof HTMLInputElement
       ? showQuickAccessInput.checked
       : state.generalSettings.showQuickAccess,
-    showBrowserShortcuts: showBrowserShortcutsInput instanceof HTMLInputElement
-      ? showBrowserShortcutsInput.checked
-      : state.generalSettings.showBrowserShortcuts,
     showSourceNavigation: showSourceNavigationInput instanceof HTMLInputElement
       ? showSourceNavigationInput.checked
       : state.generalSettings.showSourceNavigation
@@ -5193,7 +5097,6 @@ function syncGeneralSettingsControls(): void {
   const hideInput = document.getElementById('general-hide-settings-trigger')
   const showOverviewInput = document.getElementById('general-show-overview')
   const showQuickAccessInput = document.getElementById('general-show-quick-access')
-  const showBrowserShortcutsInput = document.getElementById('general-show-browser-shortcuts')
   const showSourceNavigationInput = document.getElementById('folder-show-source-navigation')
 
   if (hideInput instanceof HTMLInputElement) {
@@ -5204,9 +5107,6 @@ function syncGeneralSettingsControls(): void {
   }
   if (showQuickAccessInput instanceof HTMLInputElement) {
     showQuickAccessInput.checked = state.generalSettings.showQuickAccess
-  }
-  if (showBrowserShortcutsInput instanceof HTMLInputElement) {
-    showBrowserShortcutsInput.checked = state.generalSettings.showBrowserShortcuts
   }
   if (showSourceNavigationInput instanceof HTMLInputElement) {
     showSourceNavigationInput.checked = state.generalSettings.showSourceNavigation
