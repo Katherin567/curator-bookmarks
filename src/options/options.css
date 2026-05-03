@@ -354,8 +354,17 @@ html {
   scrollbar-gutter: stable;
 }
 
+html.options-dashboard-embed-root {
+  overflow: hidden;
+  background: transparent;
+}
+
 body {
   min-height: 100vh;
+}
+
+body.options-dashboard-embed {
+  background: transparent;
 }
 
 a {
@@ -2443,6 +2452,13 @@ body.dashboard-fullscreen-active {
   border: 0;
   border-radius: 0;
   background: #080809;
+}
+
+.options-dashboard-embed.dashboard-fullscreen-active .options-shell,
+.options-dashboard-embed.dashboard-fullscreen-active .options-layout,
+.options-dashboard-embed.dashboard-fullscreen-active .options-main,
+.options-dashboard-embed.dashboard-fullscreen-active .dashboard-panel {
+  background: transparent;
 }
 
 .dashboard-fullscreen-active .dashboard-title-row {

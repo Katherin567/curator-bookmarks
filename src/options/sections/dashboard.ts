@@ -100,6 +100,7 @@ interface DashboardCallbacks {
   regenerateAiTags: (bookmark: BookmarkRecord, signal?: AbortSignal) => Promise<void>
   openMoveModal: (source: string) => void
   closeMoveModal: () => void
+  exitDashboard?: () => void
   confirm: (options: {
     title: string
     copy: string
@@ -379,7 +380,11 @@ export async function handleDashboardClick(event: Event, callbacks: DashboardCal
       const bookmarkId = String(actionButton.getAttribute('data-dashboard-bookmark-id') || '').trim()
       moveSingleDashboardItem(bookmarkId, callbacks)
     } else if (action === 'exit-dashboard') {
-      window.location.hash = '#general'
+      if (callbacks.exitDashboard) {
+        callbacks.exitDashboard()
+      } else {
+        window.location.hash = '#general'
+      }
     } else if (action === 'edit-tags') {
       const bookmarkId = String(actionButton.getAttribute('data-dashboard-bookmark-id') || '').trim()
       openDashboardTagEditor(bookmarkId)
