@@ -1660,7 +1660,7 @@ body.settings-trigger-auto-hide .settings-trigger[aria-expanded="true"] {
 }
 
 .settings-section {
-  margin-top: 24px;
+  margin-top: 28px;
 }
 
 .settings-section:first-child {
@@ -1669,14 +1669,14 @@ body.settings-trigger-auto-hide .settings-trigger[aria-expanded="true"] {
 
 .settings-section h2 {
   display: flex;
-  min-height: 22px;
+  min-height: 24px;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin: 0 0 9px;
-  color: rgba(245, 245, 247, 0.58);
-  font-size: 12px;
-  font-weight: 650;
+  margin: 0 0 10px;
+  color: rgba(245, 245, 247, 0.78);
+  font-size: 13px;
+  font-weight: 760;
   letter-spacing: 0;
 }
 

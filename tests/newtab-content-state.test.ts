@@ -302,3 +302,12 @@ test('newtab settings rows avoid per-option divider lines', () => {
   assert.doesNotMatch(getCssRuleBody(css, '.icon-live-preview-panel'), /border-bottom:/)
   assert.doesNotMatch(getCssRuleBody(css, '.icon-preset-row'), /border-bottom:/)
 })
+
+test('newtab settings section titles are visually prominent', () => {
+  const css = readProjectFile('src/newtab/newtab.css')
+  const sectionTitleRule = getCssRuleBody(css, '.settings-section h2')
+
+  assert.match(sectionTitleRule, /font-size:\s*13px/)
+  assert.match(sectionTitleRule, /font-weight:\s*760/)
+  assert.match(sectionTitleRule, /color:\s*rgba\(245,\s*245,\s*247,\s*0\.78\)/)
+})
