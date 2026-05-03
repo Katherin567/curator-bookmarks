@@ -32,12 +32,14 @@ import {
 } from './icon-settings.js'
 import {
   buildNewTabSearchIndex,
+  buildNewTabSourceNavigationItems,
   createMissingFolderView,
   createNewTabPage,
   createStateView,
   buildNewTabPortalOverview,
   collectPortalBookmarkSourceItems,
   getPortalQuickAccessItems,
+  getNewTabSourceAnchorId,
   getSearchBookmarkSuggestionsFromIndex,
   getVerticalCenterCollisionOffset,
   resolvePortalPanelLayout,
@@ -123,7 +125,8 @@ const DEFAULT_GENERAL_SETTINGS = {
   hideSettingsTrigger: false,
   showPortalOverview: true,
   showQuickAccess: true,
-  showBrowserShortcuts: true
+  showBrowserShortcuts: true,
+  showSourceNavigation: true
 }
 const DEFAULT_TIME_SETTINGS = {
   enabled: true,
@@ -649,6 +652,9 @@ function bindFolderSettingsEvents(): void {
   document
     .getElementById('folder-hide-names')
     ?.addEventListener('change', handleFolderSettingsChange)
+  document
+    .getElementById('folder-show-source-navigation')
+    ?.addEventListener('change', handleGeneralSettingsChange)
   document
     .getElementById('folder-candidates-toggle')
     ?.addEventListener('click', toggleFolderCandidates)
@@ -3017,6 +3023,11 @@ function createBookmarkSections(sections: NewTabFolderSection[]): HTMLElement {
     view.appendChild(portal)
   }
 
+  const sourceNavigation = createSourceNavigation(sections)
+  if (sourceNavigation) {
+    view.appendChild(sourceNavigation)
+  }
+
   const groupList = document.createElement('div')
   groupList.className = 'bookmark-folder-sections'
   let renderedBookmarkIndex = 0
@@ -3024,7 +3035,9 @@ function createBookmarkSections(sections: NewTabFolderSection[]): HTMLElement {
   for (const section of sections) {
     const sectionNode = document.createElement('section')
     sectionNode.className = 'bookmark-folder-section'
+    sectionNode.id = getNewTabSourceAnchorId(section.id)
     sectionNode.dataset.folderSectionId = section.id
+    sectionNode.tabIndex = -1
     if (section.id === state.draggingFolderId && state.folderDragOriginalOrderIds.length) {
       sectionNode.classList.add('dragging-folder')
     }
@@ -3077,6 +3090,66 @@ function createBookmarkSections(sections: NewTabFolderSection[]): HTMLElement {
 
   view.appendChild(groupList)
   return view
+}
+
+function createSourceNavigation(sections: NewTabFolderSection[]): HTMLElement | null {
+  if (!state.generalSettings.showSourceNavigation || sections.length < 2) {
+    return null
+  }
+
+  const items = buildNewTabSourceNavigationItems(sections)
+  if (items.length < 2) {
+    return null
+  }
+
+  const nav = document.createElement('nav')
+  nav.className = 'source-navigation'
+  nav.setAttribute('aria-label', '书签来源导航')
+
+  const label = document.createElement('span')
+  label.className = 'source-navigation-label'
+  label.textContent = '来源'
+
+  const list = document.createElement('div')
+  list.className = 'source-navigation-list'
+
+  for (const item of items) {
+    const link = document.createElement('a')
+    link.className = 'source-navigation-link'
+    link.href = `#${item.anchorId}`
+    link.dataset.sourceNavigationTarget = item.anchorId
+    link.title = item.path
+    link.draggable = false
+    link.setAttribute('aria-label', `跳转到「${item.title}」，${item.bookmarkCount} 个书签`)
+    link.addEventListener('click', (event) => {
+      event.preventDefault()
+      focusSourceSection(item.anchorId)
+    })
+
+    const title = document.createElement('span')
+    title.className = 'source-navigation-title'
+    title.textContent = item.title
+
+    const count = document.createElement('span')
+    count.className = 'source-navigation-count'
+    count.textContent = String(item.bookmarkCount)
+
+    link.append(title, count)
+    list.appendChild(link)
+  }
+
+  nav.append(label, list)
+  return nav
+}
+
+function focusSourceSection(anchorId: string): void {
+  const section = document.getElementById(anchorId)
+  if (!(section instanceof HTMLElement)) {
+    return
+  }
+
+  section.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  section.focus({ preventScroll: true })
 }
 
 function createFolderAddButton(section: NewTabFolderSection): HTMLButtonElement {
@@ -5085,7 +5158,8 @@ function normalizeGeneralSettings(rawSettings: unknown): typeof DEFAULT_GENERAL_
     showQuickAccess: typeof settings.showQuickAccess === 'boolean'
       ? settings.showQuickAccess
       : legacyQuickAccess,
-    showBrowserShortcuts: normalizeBrowserQuickShortcutsVisible(settings.showBrowserShortcuts)
+    showBrowserShortcuts: normalizeBrowserQuickShortcutsVisible(settings.showBrowserShortcuts),
+    showSourceNavigation: settings.showSourceNavigation !== false
   }
 }
 
@@ -5094,6 +5168,7 @@ function readGeneralSettingsFromControls(): typeof DEFAULT_GENERAL_SETTINGS {
   const showOverviewInput = document.getElementById('general-show-overview')
   const showQuickAccessInput = document.getElementById('general-show-quick-access')
   const showBrowserShortcutsInput = document.getElementById('general-show-browser-shortcuts')
+  const showSourceNavigationInput = document.getElementById('folder-show-source-navigation')
 
   return normalizeGeneralSettings({
     hideSettingsTrigger: hideInput instanceof HTMLInputElement
@@ -5107,7 +5182,10 @@ function readGeneralSettingsFromControls(): typeof DEFAULT_GENERAL_SETTINGS {
       : state.generalSettings.showQuickAccess,
     showBrowserShortcuts: showBrowserShortcutsInput instanceof HTMLInputElement
       ? showBrowserShortcutsInput.checked
-      : state.generalSettings.showBrowserShortcuts
+      : state.generalSettings.showBrowserShortcuts,
+    showSourceNavigation: showSourceNavigationInput instanceof HTMLInputElement
+      ? showSourceNavigationInput.checked
+      : state.generalSettings.showSourceNavigation
   })
 }
 
@@ -5116,6 +5194,7 @@ function syncGeneralSettingsControls(): void {
   const showOverviewInput = document.getElementById('general-show-overview')
   const showQuickAccessInput = document.getElementById('general-show-quick-access')
   const showBrowserShortcutsInput = document.getElementById('general-show-browser-shortcuts')
+  const showSourceNavigationInput = document.getElementById('folder-show-source-navigation')
 
   if (hideInput instanceof HTMLInputElement) {
     hideInput.checked = state.generalSettings.hideSettingsTrigger
@@ -5128,6 +5207,9 @@ function syncGeneralSettingsControls(): void {
   }
   if (showBrowserShortcutsInput instanceof HTMLInputElement) {
     showBrowserShortcutsInput.checked = state.generalSettings.showBrowserShortcuts
+  }
+  if (showSourceNavigationInput instanceof HTMLInputElement) {
+    showSourceNavigationInput.checked = state.generalSettings.showSourceNavigation
   }
 }
 
