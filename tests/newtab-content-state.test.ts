@@ -17,6 +17,12 @@ function readProjectFile(path: string): string {
   return readFileSync(resolve(process.cwd(), path), 'utf8')
 }
 
+function getCssRuleBody(css: string, selector: string): string {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = css.match(new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`))
+  return match?.[1] || ''
+}
+
 test('does not offset vertically centered icons when utility stack has enough clearance', () => {
   assert.equal(getVerticalCenterCollisionOffset({
     utilityBottom: 120,
@@ -286,4 +292,13 @@ test('newtab settings drawer layout responds to drawer width', () => {
   assert.match(script, /--preview-grid-max-width/)
   assert.match(script, /grid\.style\.gridTemplateColumns = `repeat\(\$\{previewColumns\}, minmax\(0, 1fr\)\)`/)
   assert.doesNotMatch(script, /grid\.style\.gridTemplateColumns = `repeat\(\$\{previewColumns\}, minmax\(0, var\(--preview-tile-width\)\)\)`/)
+})
+
+test('newtab settings rows avoid per-option divider lines', () => {
+  const css = readProjectFile('src/newtab/newtab.css')
+
+  assert.doesNotMatch(getCssRuleBody(css, '.setting-row'), /border-bottom:/)
+  assert.equal(getCssRuleBody(css, '.setting-row:last-child'), '')
+  assert.doesNotMatch(getCssRuleBody(css, '.icon-live-preview-panel'), /border-bottom:/)
+  assert.doesNotMatch(getCssRuleBody(css, '.icon-preset-row'), /border-bottom:/)
 })
