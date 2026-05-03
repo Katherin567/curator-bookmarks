@@ -745,6 +745,51 @@ body.background-mask-enabled .newtab-background-mask {
   justify-items: stretch;
 }
 
+.newtab-dashboard-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  align-items: stretch;
+  justify-items: stretch;
+  overflow: hidden;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.newtab-dashboard-overlay[hidden] {
+  display: none;
+}
+
+.newtab-dashboard-surface {
+  position: relative;
+  display: grid;
+  width: 100vw;
+  width: 100dvw;
+  min-width: 0;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid rgba(245, 245, 247, 0.12);
+  border-radius: 0;
+  background: rgba(5, 5, 6, 0.68);
+  box-shadow:
+    0 24px 72px rgba(0, 0, 0, 0.36),
+    inset 0 1px 0 rgba(255, 255, 255, 0.055);
+  -webkit-backdrop-filter: blur(24px) saturate(0.92);
+  backdrop-filter: blur(24px) saturate(0.92);
+}
+
+.newtab-dashboard-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+}
+
 .bookmark-folder-sections {
   display: grid;
   width: 100%;
@@ -1233,9 +1278,9 @@ body.folder-names-hidden.folder-order-dragging .folder-section-header-row {
 
 .bookmark-tile {
   --bookmark-card-rgb: 245 245 247;
-  --bookmark-card-bg-alpha: 0.046;
-  --bookmark-card-border-alpha: 0.12;
-  --bookmark-card-hover-alpha: 0.07;
+  --bookmark-card-bg-alpha: 0.3;
+  --bookmark-card-border-alpha: 0.1;
+  --bookmark-card-hover-alpha: 0.38;
   display: grid;
   width: 100%;
   min-height: calc(var(--icon-shell-size) + 18px);
@@ -1244,15 +1289,12 @@ body.folder-names-hidden.folder-order-dragging .folder-section-header-row {
   gap: 10px;
   justify-self: stretch;
   padding: 8px 10px;
-  border: 1px solid rgb(var(--bookmark-card-rgb) / var(--bookmark-card-border-alpha));
+  border: 1px solid rgba(245, 245, 247, var(--bookmark-card-border-alpha));
   border-radius: 8px;
-  background:
-    linear-gradient(
-      135deg,
-      rgb(var(--bookmark-card-rgb) / var(--bookmark-card-bg-alpha)),
-      rgba(255, 255, 255, 0.024)
-    ),
-    rgba(8, 8, 9, 0.42);
+  background: rgba(8, 8, 9, var(--bookmark-card-bg-alpha));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
   color: var(--text);
   text-align: left;
   text-decoration: none;
@@ -1284,22 +1326,16 @@ body.folder-names-hidden.folder-order-dragging .folder-section-header-row {
 
 .bookmark-tile:hover,
 .bookmark-tile:focus-visible {
-  border-color: rgb(var(--bookmark-card-rgb) / 0.22);
-  background:
-    linear-gradient(
-      135deg,
-      rgb(var(--bookmark-card-rgb) / var(--bookmark-card-hover-alpha)),
-      rgba(255, 255, 255, 0.034)
-    ),
-    rgba(14, 14, 15, 0.58);
-  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.18);
+  border-color: rgba(245, 245, 247, 0.16);
+  background: rgba(8, 8, 9, var(--bookmark-card-hover-alpha));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
   transform: translateY(-1px);
 }
 
 .bookmark-tile:active {
-  border-color: rgb(var(--bookmark-card-rgb) / 0.16);
-  background: rgba(8, 8, 9, 0.72);
-  box-shadow: none;
+  border-color: rgba(245, 245, 247, 0.12);
+  background: rgba(8, 8, 9, 0.44);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
   transform: translateY(1px) scale(0.985);
   transition-duration: 60ms;
 }
@@ -1322,15 +1358,9 @@ body.bookmark-drag-preview-initializing .bookmark-tile {
 body.bookmark-dragging .bookmark-tile:not(.dragging):hover,
 body.bookmark-dragging .bookmark-tile:not(.dragging):active,
 body.bookmark-dragging .bookmark-tile:not(.dragging):focus-visible {
-  border-color: rgb(var(--bookmark-card-rgb) / var(--bookmark-card-border-alpha));
-  background:
-    linear-gradient(
-      135deg,
-      rgb(var(--bookmark-card-rgb) / var(--bookmark-card-bg-alpha)),
-      rgba(255, 255, 255, 0.024)
-    ),
-    rgba(8, 8, 9, 0.42);
-  box-shadow: none;
+  border-color: rgba(245, 245, 247, var(--bookmark-card-border-alpha));
+  background: rgba(8, 8, 9, var(--bookmark-card-bg-alpha));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
   transform: none;
 }
 
@@ -1465,7 +1495,7 @@ body.bookmark-dragging .bookmark-tile:not(.dragging):focus-visible .bookmark-tit
   top: 0;
   right: 0;
   z-index: 30;
-  width: 96px;
+  width: 198px;
   height: 96px;
   pointer-events: none;
 }
@@ -1474,10 +1504,13 @@ body.bookmark-dragging .bookmark-tile:not(.dragging):focus-visible .bookmark-tit
   position: absolute;
   top: 18px;
   right: 18px;
-  display: grid;
-  width: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 40px;
   height: 40px;
-  place-items: center;
+  padding: 0 10px;
   border: 1px solid rgba(245, 245, 247, 0.12);
   border-radius: 8px;
   background: rgba(24, 24, 26, 0.72);
@@ -1492,6 +1525,22 @@ body.bookmark-dragging .bookmark-tile:not(.dragging):focus-visible .bookmark-tit
     border-color var(--ease-standard),
     color var(--ease-standard),
     transform 160ms ease;
+}
+
+.dashboard-trigger {
+  right: 66px;
+  min-width: 124px;
+  padding: 0 12px;
+  text-decoration: none;
+}
+
+.dashboard-trigger span {
+  color: currentColor;
+  font-size: 12px;
+  font-weight: 720;
+  letter-spacing: 0;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .settings-trigger:hover,
@@ -1536,6 +1585,7 @@ body.settings-trigger-auto-hide .settings-trigger[aria-expanded="true"] {
 
 .settings-trigger svg,
 .settings-close svg {
+  flex: 0 0 auto;
   width: 20px;
   height: 20px;
   fill: none;
@@ -3295,6 +3345,19 @@ body.settings-trigger-auto-hide .settings-trigger[aria-expanded="true"] {
     --newtab-utility-gap: 10px;
   }
 
+  .newtab-dashboard-overlay {
+    padding: 0;
+  }
+
+  .newtab-dashboard-surface {
+    width: 100vw;
+    width: 100dvw;
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+    border-radius: 0;
+  }
+
   .newtab-portal {
     grid-template-columns: 1fr;
     gap: 12px;
@@ -3389,6 +3452,20 @@ body.settings-trigger-auto-hide .settings-trigger[aria-expanded="true"] {
   .settings-trigger {
     top: 12px;
     right: 12px;
+  }
+
+  .settings-trigger-zone {
+    width: 170px;
+  }
+
+  .dashboard-trigger {
+    right: 58px;
+    min-width: 112px;
+    padding: 0 10px;
+  }
+
+  .dashboard-trigger span {
+    font-size: 11px;
   }
 
   .settings-drawer {

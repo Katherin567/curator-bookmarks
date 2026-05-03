@@ -250,6 +250,11 @@ import {
   renderDashboardSection
 } from './sections/dashboard.js'
 
+const IS_OPTIONS_DASHBOARD_EMBED_MODE =
+  new URLSearchParams(window.location.search).get('embed') === 'newtab-dashboard'
+
+applyOptionsDashboardEmbedClasses()
+
 let availabilityRenderFrame = 0
 let availabilityDurationTimer = 0
 let aiNamingDurationTimer = 0
@@ -348,6 +353,7 @@ const dashboardCallbacks = {
   regenerateAiTags: regenerateDashboardAiTagsForBookmark,
   openMoveModal,
   closeMoveModal,
+  exitDashboard,
   confirm: requestConfirmation,
   recycleCallbacks
 }
@@ -359,6 +365,7 @@ const folderCleanupCallbacks = {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+  applyOptionsDashboardEmbedClasses()
   cacheDom()
   bindEvents()
 
@@ -486,6 +493,26 @@ function syncPageSection() {
   }
 
   scrollToSectionAnchor()
+}
+
+function applyOptionsDashboardEmbedClasses(): void {
+  document.documentElement.classList.toggle(
+    'options-dashboard-embed-root',
+    IS_OPTIONS_DASHBOARD_EMBED_MODE
+  )
+  document.body?.classList.toggle('options-dashboard-embed', IS_OPTIONS_DASHBOARD_EMBED_MODE)
+}
+
+function exitDashboard(): void {
+  if (IS_OPTIONS_DASHBOARD_EMBED_MODE) {
+    window.parent.postMessage(
+      { type: 'curator:newtab-dashboard-close' },
+      window.location.origin
+    )
+    return
+  }
+
+  window.location.hash = '#general'
 }
 
 function syncCollapsibleNavGroups(activeSectionKey) {
@@ -860,10 +887,18 @@ function bindEvents() {
 }
 
 function getCurrentSectionKey() {
+  if (IS_OPTIONS_DASHBOARD_EMBED_MODE) {
+    return 'dashboard'
+  }
+
   return window.location.hash.replace(/^#/, '').split(':')[0] || 'general'
 }
 
 function getCurrentSectionAnchor() {
+  if (IS_OPTIONS_DASHBOARD_EMBED_MODE) {
+    return ''
+  }
+
   const [, anchor = ''] = window.location.hash.replace(/^#/, '').split(':')
   return anchor
 }
@@ -944,7 +979,7 @@ function handleKeydown(event) {
 
   if (getCurrentSectionKey() === 'dashboard') {
     event.preventDefault()
-    window.location.hash = '#general'
+    exitDashboard()
   }
 }
 

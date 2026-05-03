@@ -407,7 +407,7 @@
                 <label class="options-search dashboard-search">
                   <span class="options-search-label">搜索书签</span>
                   <span class="dashboard-query-row">
-                    <input id="dashboard-query" class="options-search-input" type="search" spellcheck="false" placeholder="site:github.com react / folder:前端 type:文档 / 最近一个月 AI 教程 -youtube">
+                    <input id="dashboard-query" class="options-search-input" type="search" spellcheck="false" placeholder="">
                     <button
                       id="dashboard-search-help-toggle"
                       class="dashboard-help-button"
@@ -426,9 +426,6 @@
                 </p>
                 <div id="dashboard-search-chips" class="dashboard-search-chips hidden" aria-label="当前搜索条件"></div>
                 <nav id="dashboard-folder-breadcrumbs" class="dashboard-folder-breadcrumbs hidden" aria-label="当前 Dashboard 文件夹路径"></nav>
-              </div>
-              <div class="dashboard-toolbar-actions">
-                <span id="dashboard-result-count" class="option-value">0 条书签</span>
               </div>
             </div>
 
@@ -451,8 +448,24 @@
                 <strong id="dashboard-cards-title">全部书签</strong>
                 <p class="detect-results-subtitle">拖动卡片空白区域可拖入目标文件夹；按钮、链接和复选框不会触发拖拽。</p>
               </div>
-              <div id="dashboard-results" class="dashboard-card-grid">
-                <div class="detect-empty">正在读取书签目录。</div>
+              <div class="dashboard-content-layout">
+                <aside id="dashboard-folder-sidebar" class="dashboard-folder-sidebar" aria-labelledby="dashboard-folder-sidebar-title" aria-label="书签文件夹">
+                  <div class="dashboard-folder-sidebar-head">
+                    <strong id="dashboard-folder-sidebar-title">文件夹</strong>
+                    <span id="dashboard-folder-sidebar-count" class="option-value">0 个文件夹</span>
+                  </div>
+                  <nav
+                    id="dashboard-folder-tree"
+                    class="dashboard-folder-tree"
+                    aria-label="按文件夹筛选书签"
+                    role="tree"
+                  ></nav>
+                </aside>
+                <div class="dashboard-card-region">
+                  <div id="dashboard-results" class="dashboard-card-grid">
+                    <div class="detect-empty">正在读取书签目录。</div>
+                  </div>
+                </div>
               </div>
             </section>
 

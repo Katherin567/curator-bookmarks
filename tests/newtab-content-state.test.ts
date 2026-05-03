@@ -212,6 +212,89 @@ test('newtab settings expose one combined quick access switch', () => {
   assert.doesNotMatch(html, /id="general-show-recent"/)
 })
 
+test('newtab search settings use Google as the default engine without duplicate default entry', () => {
+  const html = readProjectFile('src/newtab/newtab.html')
+  const source = readProjectFile('src/newtab/newtab.ts')
+
+  assert.doesNotMatch(html, /value="default"/)
+  assert.doesNotMatch(html, /data-search-engine-toggle="default"/)
+  assert.match(source, /engine:\s*'google'\s+as SearchEngineId/)
+})
+
+test('newtab exposes a lazy options dashboard iframe route', () => {
+  const html = readProjectFile('src/newtab/newtab.html')
+  const script = readProjectFile('src/newtab/newtab.ts')
+  const dashboardTrigger = html.match(/<a[\s\S]*?id="newtab-dashboard-trigger"[\s\S]*?<\/a>/)?.[0] || ''
+  const dashboardOverlay = html.match(/<[a-z]+[\s\S]*?id="newtab-dashboard-overlay"[\s\S]*?>/)?.[0] || ''
+  const dashboardFrame = html.match(/<iframe[\s\S]*?id="newtab-dashboard-frame"[\s\S]*?>/)?.[0] || ''
+
+  assert.match(dashboardTrigger, /href="#dashboard"/)
+  assert.match(dashboardTrigger, /aria-controls="newtab-dashboard-overlay"/)
+  assert.match(dashboardTrigger, />\s*书签仪表盘\s*<\/span>/)
+  assert.match(dashboardOverlay, /\bhidden\b/)
+  assert.match(dashboardOverlay, /aria-hidden="true"/)
+  assert.match(dashboardFrame, /loading="lazy"/)
+  assert.match(dashboardFrame, /title="书签仪表盘"/)
+  assert.doesNotMatch(html, /data-newtab-dashboard-root/)
+
+  assert.ok(
+    /NEWTAB_DASHBOARD_EMBED_PATH/.test(script) ||
+      /options\.html\?embed=newtab-dashboard#dashboard/.test(script),
+    'newtab should point the iframe at the embedded options dashboard route'
+  )
+  assert.match(script, /chrome\.runtime\.getURL\(/)
+  assert.match(script, /window\.location\.hash === '#dashboard'/)
+  assert.match(script, /addEventListener\(['"]message['"][\s\S]*curator:newtab-dashboard-close/)
+
+  for (const pattern of [
+    /buildDashboardPanel/,
+    /createDashboardBookmarkCard/,
+    /renderDashboardFolderSidebar/,
+    /applyDashboardFolderFilter/,
+    /renderDashboardCardWindow/,
+    /dashboard-performance/,
+    /createDashboardFaviconWarmupQueue/,
+    /getDashboardVirtualWindow/,
+    /buildDashboardModel/,
+    /filterDashboardItems/,
+    /sortDashboardItems/
+  ]) {
+    assert.doesNotMatch(script, pattern)
+  }
+})
+
+test('newtab does not duplicate options dashboard markup or card semantics', () => {
+  const html = readProjectFile('src/newtab/newtab.html')
+  const script = readProjectFile('src/newtab/newtab.ts')
+
+  assert.doesNotMatch(html, /class="options-panel dashboard-panel"/)
+  assert.doesNotMatch(html, /id="newtab-dashboard"[\s\S]*data-newtab-dashboard-root/)
+
+  for (const className of [
+    'options-section-label',
+    'options-group dashboard-toolbar',
+    'options-search dashboard-search',
+    'options-search-input',
+    'options-button secondary small',
+    'dashboard-panel',
+    'dashboard-title-row',
+    'dashboard-toolbar',
+    'dashboard-content-layout',
+    'dashboard-folder-sidebar',
+    'dashboard-folder-tree',
+    'dashboard-search',
+    'dashboard-card-grid',
+    'dashboard-bookmark-card'
+  ]) {
+    assert.doesNotMatch(script, new RegExp(className))
+  }
+
+  assert.doesNotMatch(script, /Visual Bookmark Management/)
+  assert.doesNotMatch(script, /全部书签/)
+  assert.doesNotMatch(script, /detect-result-open/)
+  assert.doesNotMatch(script, /detect-result-action/)
+})
+
 test('newtab boots with a wallpaper loading guard before app content is shown', () => {
   const html = readProjectFile('src/newtab/newtab.html')
   const css = readProjectFile('src/newtab/newtab.css')
@@ -368,4 +451,52 @@ test('newtab settings section titles are visually prominent', () => {
   assert.match(sectionTitleRule, /font-size:\s*13px/)
   assert.match(sectionTitleRule, /font-weight:\s*760/)
   assert.match(sectionTitleRule, /color:\s*rgba\(245,\s*245,\s*247,\s*0\.78\)/)
+})
+
+test('newtab dashboard glass layer only styles the iframe shell', () => {
+  const newtabCss = readProjectFile('src/newtab/newtab.css')
+  const optionsCss = readProjectFile('src/options/options.css')
+
+  assert.match(newtabCss, /\.newtab-dashboard-overlay\s*\{[\s\S]*?position:\s*fixed/)
+  assert.match(newtabCss, /\.newtab-dashboard-overlay\s*\{[\s\S]*?inset:\s*0/)
+  assert.match(newtabCss, /\.newtab-dashboard-overlay\s*\{[\s\S]*?align-items:\s*stretch/)
+  assert.match(newtabCss, /\.newtab-dashboard-overlay\s*\{[\s\S]*?justify-items:\s*stretch/)
+  assert.match(newtabCss, /\.newtab-dashboard-overlay\s*\{[\s\S]*?padding:\s*0/)
+  assert.match(newtabCss, /\.newtab-dashboard-overlay\[hidden\]\s*\{[\s\S]*?display:\s*none/)
+  assert.match(newtabCss, /\.newtab-dashboard-surface\s*\{[\s\S]*?width:\s*100dvw/)
+  assert.match(newtabCss, /\.newtab-dashboard-surface\s*\{[\s\S]*?height:\s*100dvh/)
+  assert.match(newtabCss, /\.newtab-dashboard-surface\s*\{[\s\S]*?border-radius:\s*0/)
+  assert.match(newtabCss, /\.newtab-dashboard-surface\s*\{[\s\S]*?backdrop-filter:\s*blur\(/)
+  assert.match(newtabCss, /\.newtab-dashboard-frame\s*\{/)
+  assert.match(newtabCss, /\.dashboard-trigger\s*\{[\s\S]*?min-width:\s*124px/)
+  assert.match(newtabCss, /\.dashboard-trigger span\s*\{[\s\S]*?white-space:\s*nowrap/)
+  assert.match(newtabCss, /@media \(prefers-reduced-motion: reduce\)/)
+
+  assert.doesNotMatch(
+    newtabCss,
+    /\.newtab-dashboard-surface\s+\.(?:dashboard-|options-|detect-)/
+  )
+  assert.doesNotMatch(
+    newtabCss,
+    /@media [^{]+\{[\s\S]*?\.newtab-dashboard-surface\s+\.dashboard-(?:title-row|toolbar|card-grid|bookmark-card)/
+  )
+  assert.doesNotMatch(
+    newtabCss,
+    /\.newtab-dashboard-surface\s+\.dashboard-(?:content-layout|folder-sidebar|folder-tree)/
+  )
+  assert.doesNotMatch(optionsCss, /newtab-dashboard-(?:overlay|surface|frame)/)
+})
+
+test('newtab bookmark tiles match the frosted overview card surface', () => {
+  const newtabCss = readProjectFile('src/newtab/newtab.css')
+  const tileRule = getCssRuleBody(newtabCss, '.bookmark-tile')
+  const hoverRule = getCssRuleBody(newtabCss, '.bookmark-tile:hover,\n.bookmark-tile:focus-visible')
+
+  assert.match(tileRule, /border-radius:\s*8px/)
+  assert.match(tileRule, /background:\s*rgba\(8,\s*8,\s*9,\s*var\(--bookmark-card-bg-alpha\)\)/)
+  assert.match(tileRule, /box-shadow:\s*inset\s+0\s+1px\s+0\s+rgba\(255,\s*255,\s*255,\s*0\.035\)/)
+  assert.match(tileRule, /backdrop-filter:\s*blur\(16px\)/)
+  assert.doesNotMatch(tileRule, /linear-gradient/)
+  assert.match(hoverRule, /background:\s*rgba\(8,\s*8,\s*9,\s*var\(--bookmark-card-hover-alpha\)\)/)
+  assert.doesNotMatch(hoverRule, /box-shadow:\s*0\s+10px/)
 })

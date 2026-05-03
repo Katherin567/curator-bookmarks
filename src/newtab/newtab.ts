@@ -92,7 +92,6 @@ import {
   planSearchOpenTargets,
   type SearchEngineId
 } from './search-engines.js'
-
 const FAVICON_SIZE = 64
 const FAVICON_COLOR_SAMPLE_SIZE = 32
 const CUSTOM_ICON_MAX_BYTES = 2 * 1024 * 1024
@@ -124,7 +123,7 @@ const SUPPORTED_BACKGROUND_MASK_STYLES = new Set(['dark', 'frosted', 'light'])
 const DEFAULT_SEARCH_SETTINGS = {
   enabled: true,
   openInNewTab: false,
-  engine: 'default' as SearchEngineId,
+  engine: 'google' as SearchEngineId,
   enabledEngines: DEFAULT_ENABLED_SEARCH_ENGINE_IDS,
   placeholder: '搜索网页或书签',
   width: 44,
@@ -305,10 +304,15 @@ const state = {
   timeSettings: { ...DEFAULT_TIME_SETTINGS },
   settingsSaveState: 'idle' as SettingsSaveState,
   settingsSaveMessage: '',
+  dashboardOpen: false,
+  dashboardFrameLoaded: false,
   faviconRefreshTokens: new Map<string, number>()
 }
 
 const root = document.getElementById('newtab-root')
+const dashboardTrigger = document.getElementById('newtab-dashboard-trigger')
+const dashboardOverlay = document.getElementById('newtab-dashboard-overlay')
+const dashboardFrame = document.getElementById('newtab-dashboard-frame') as HTMLIFrameElement | null
 const settingsTrigger = document.getElementById('newtab-settings-trigger')
 const settingsDrawer = document.getElementById('newtab-settings-drawer')
 const settingsBackdrop = document.getElementById('newtab-settings-backdrop')
@@ -350,6 +354,13 @@ function bindEvents(): void {
   bindIconSettingsEvents()
   bindTimeSettingsEvents()
   bindSettingsRangeVisuals()
+  dashboardTrigger?.addEventListener('click', (event) => {
+    event.preventDefault()
+    openDashboardRoute()
+  })
+  window.addEventListener('hashchange', syncDashboardRoute)
+  window.addEventListener('message', handleDashboardMessage)
+  syncDashboardRoute()
   settingsTrigger?.addEventListener('click', () => {
     openSettingsDrawer()
   })
@@ -519,6 +530,11 @@ function handleDocumentKeydown(event: KeyboardEvent): void {
   }
 
   if (event.key === 'Escape') {
+    if (state.dashboardOpen) {
+      event.preventDefault()
+      closeDashboardRoute()
+      return
+    }
     if (isSettingsDrawerOpen()) {
       event.preventDefault()
       closeSettingsDrawer()
@@ -2562,6 +2578,81 @@ function render(): void {
   scheduleVerticalCenterCollisionUpdate()
 }
 
+function syncDashboardRoute(): void {
+  const shouldOpen = window.location.hash === '#dashboard'
+  if (shouldOpen === state.dashboardOpen) {
+    if (shouldOpen) {
+      ensureDashboardFrameLoaded()
+    }
+    return
+  }
+
+  state.dashboardOpen = shouldOpen
+  renderDashboard()
+  if (shouldOpen) {
+    closeSettingsDrawer()
+  }
+}
+
+function openDashboardRoute(): void {
+  if (window.location.hash === '#dashboard') {
+    syncDashboardRoute()
+    return
+  }
+
+  window.location.hash = 'dashboard'
+}
+
+function closeDashboardRoute(): void {
+  if (window.location.hash !== '#dashboard') {
+    state.dashboardOpen = false
+    renderDashboard()
+    dashboardTrigger?.focus()
+    return
+  }
+
+  history.replaceState(null, '', `${window.location.pathname}${window.location.search}`)
+  syncDashboardRoute()
+  dashboardTrigger?.focus()
+}
+
+function ensureDashboardFrameLoaded(): void {
+  if (state.dashboardFrameLoaded || !dashboardFrame) {
+    return
+  }
+
+  dashboardFrame.src = chrome.runtime.getURL('src/options/options.html?embed=newtab-dashboard#dashboard')
+  state.dashboardFrameLoaded = true
+}
+
+function renderDashboard(): void {
+  if (!dashboardOverlay) {
+    return
+  }
+
+  dashboardOverlay.hidden = !state.dashboardOpen
+  dashboardOverlay.setAttribute('aria-hidden', state.dashboardOpen ? 'false' : 'true')
+  dashboardTrigger?.setAttribute('aria-expanded', state.dashboardOpen ? 'true' : 'false')
+
+  if (state.dashboardOpen) {
+    ensureDashboardFrameLoaded()
+  }
+}
+
+function handleDashboardMessage(event: MessageEvent): void {
+  if (!dashboardFrame || event.source !== dashboardFrame.contentWindow) {
+    return
+  }
+
+  if (event.origin !== window.location.origin) {
+    return
+  }
+
+  if (event.data?.type === 'curator:newtab-dashboard-close') {
+    closeDashboardRoute()
+  }
+}
+
 function renderDeleteToast(): void {
   document.querySelector<HTMLElement>('.newtab-delete-toast')?.remove()
   const deleted = state.lastDeletedBookmark
@@ -3032,7 +3123,7 @@ function getSearchEnterHint(suggestion: SearchBookmarkSuggestion | undefined): s
 }
 
 function getCurrentSearchEngineName(): string {
-  return SEARCH_ENGINE_CONFIG_BY_ID.get(state.searchSettings.engine)?.name || '默认'
+  return SEARCH_ENGINE_CONFIG_BY_ID.get(state.searchSettings.engine)?.name || 'Google'
 }
 
 function getEngineSearchHint(query: string): string {

@@ -13,70 +13,30 @@ import {
   type BookmarkTagIndex,
   type BookmarkTagRecord
 } from '../../shared/bookmark-tags.js'
-import { displayUrl, extractDomain, normalizeText } from '../../shared/text.js'
+import { displayUrl } from '../../shared/text.js'
 import { moveBookmark } from '../../shared/bookmarks-api.js'
 import { createAutoBackupBeforeDangerousOperation } from '../../shared/backup.js'
-import { ROOT_ID } from '../../shared/constants.js'
 import { renderDotMatrixLoader } from '../../shared/dot-matrix-loader.js'
 import { cancelExitMotion, closeWithExitMotion } from '../../shared/motion.js'
-import {
-  matchesParsedSearchQuery,
-  parseSearchQuery
-} from '../../shared/search-query.js'
+import { parseSearchQuery } from '../../shared/search-query.js'
 import type { ContentSnapshotIndex } from '../../shared/content-snapshots.js'
-import { buildContentSnapshotSearchMap } from '../../shared/content-snapshots.js'
+import { BOOKMARKS_BAR_ID } from '../../shared/constants.js'
+import {
+  buildDashboardModel,
+  filterDashboardItems,
+  sortDashboardItems,
+  type DashboardFilters,
+  type DashboardFolderTarget,
+  type DashboardItem,
+  type DashboardModel,
+  type DashboardSortKey
+} from '../../shared/dashboard-model.js'
 import { aiNamingState, availabilityState, contentSnapshotState, dashboardState, managerState } from '../shared-options/state.js'
 import { dom } from '../shared-options/dom.js'
 import { escapeAttr, escapeHtml } from '../shared-options/html.js'
-import { compareByPathTitle, formatDateTime } from '../shared-options/utils.js'
 import { deleteBookmarksToRecycle } from './recycle.js'
 
 export type DashboardViewMode = 'cards'
-export type DashboardSortKey = 'date-desc' | 'date-asc' | 'title-asc' | 'domain-asc'
-
-export interface DashboardFilters {
-  query?: string
-  folderId?: string
-  domain?: string
-  month?: string
-  sortKey?: DashboardSortKey
-}
-
-export interface DashboardItem extends BookmarkRecord {
-  folderTitle: string
-  topFolderId: string
-  topFolderTitle: string
-  monthKey: string
-  monthLabel: string
-  hasKnownDate: boolean
-  tagSummary: string
-  tags: string[]
-  aiTags: string[]
-  hasManualTags: boolean
-  topics: string[]
-  aliases: string[]
-  summary: string
-  searchText: string
-}
-
-export interface DashboardFolderTarget {
-  id: string
-  title: string
-  path: string
-  normalizedPath: string
-  bookmarkCount: number
-  folderCount: number
-}
-
-export interface DashboardModel {
-  items: DashboardItem[]
-  folders: FolderRecord[]
-  folderTargets: DashboardFolderTarget[]
-  totalBookmarks: number
-  totalFolders: number
-  domainCount: number
-  unknownDateCount: number
-}
 
 export interface DashboardDragStateSnapshot {
   armed: boolean
@@ -141,6 +101,7 @@ interface DashboardCallbacks {
   regenerateAiTags: (bookmark: BookmarkRecord, signal?: AbortSignal) => Promise<void>
   openMoveModal: (source: string) => void
   closeMoveModal: () => void
+  exitDashboard?: () => void
   confirm: (options: {
     title: string
     copy: string
@@ -189,168 +150,6 @@ const virtualState: DashboardVirtualState = {
 const dragState: DashboardDragState = {
   ...createDashboardDragState(),
   captureElement: null
-}
-
-export function buildDashboardModel({
-  bookmarks = [],
-  folders = [],
-  tagIndex = null,
-  contentSnapshotIndex = null,
-  contentSnapshotSearchMap = null,
-  includeFullText = false
-}: {
-  bookmarks?: BookmarkRecord[]
-  folders?: FolderRecord[]
-  tagIndex?: BookmarkTagIndex | null
-  contentSnapshotIndex?: ContentSnapshotIndex | null
-  contentSnapshotSearchMap?: Map<string, string> | null
-  includeFullText?: boolean
-} = {}): DashboardModel {
-  const folderMap = new Map(folders.map((folder) => [String(folder.id), folder]))
-  const tagRecords = tagIndex?.records || {}
-  const snapshotSearchMap = contentSnapshotIndex
-    ? buildContentSnapshotSearchMap(contentSnapshotIndex, { includeFullText })
-    : new Map<string, string>()
-  const items = bookmarks.map((bookmark) => {
-    const tagRecord = tagRecords[String(bookmark.id)] || null
-    const folder = folderMap.get(String(bookmark.parentId || '')) || null
-    const topFolder = getTopFolder(bookmark, folderMap)
-    const dateMeta = getDashboardDateMeta(bookmark.dateAdded)
-    const tags = normalizeDashboardTextList(getEffectiveBookmarkTags(tagRecord))
-    const aiTags = normalizeDashboardTextList(tagRecord?.tags)
-    const hasManualTags = Boolean(tagRecord?.manualTags?.length)
-    const topics = normalizeDashboardTextList(tagRecord?.topics)
-    const aliases = normalizeDashboardTextList(tagRecord?.aliases)
-    const summary = String(tagRecord?.summary || '').replace(/\s+/g, ' ').trim()
-    const snapshotSearchText =
-      contentSnapshotSearchMap?.get(String(bookmark.id)) ||
-      snapshotSearchMap.get(String(bookmark.id)) ||
-      ''
-    const tagSummary = tags.slice(0, 4).join(' / ')
-    const domain = String(bookmark.domain || extractDomain(bookmark.url) || '').trim()
-    const searchText = normalizeText([
-      bookmark.title,
-      bookmark.url,
-      domain,
-      bookmark.path,
-      tagRecord?.title,
-      tagRecord?.path,
-      tagRecord?.contentType,
-      summary,
-      ...tags,
-      ...topics,
-      ...aliases,
-      snapshotSearchText
-    ].join(' '))
-
-    return {
-      ...bookmark,
-      domain,
-      folderTitle: folder?.title || bookmark.path || '未归档路径',
-      topFolderId: topFolder?.id || '',
-      topFolderTitle: topFolder?.title || '未归档路径',
-      monthKey: dateMeta.key,
-      monthLabel: dateMeta.label,
-      hasKnownDate: dateMeta.known,
-      tagSummary,
-      tags,
-      aiTags,
-      hasManualTags,
-      topics,
-      aliases,
-      summary,
-      searchText
-    }
-  })
-
-  const domainSet = new Set(items.map((item) => item.domain).filter(Boolean))
-  return {
-    items,
-    folders: folders.slice().sort(compareByPathTitle),
-    folderTargets: getDashboardFolderTargets(folders),
-    totalBookmarks: items.length,
-    totalFolders: folders.filter((folder) => String(folder.id) !== ROOT_ID).length,
-    domainCount: domainSet.size,
-    unknownDateCount: items.filter((item) => !item.hasKnownDate).length
-  }
-}
-
-export function filterDashboardItems(items: DashboardItem[], filters: DashboardFilters = {}): DashboardItem[] {
-  const parsedQuery = parseSearchQuery(filters.query || '')
-  const folderId = String(filters.folderId || '').trim()
-  const domain = String(filters.domain || '').trim()
-  const month = String(filters.month || '').trim()
-
-  return items.filter((item) => {
-    if (!matchesParsedSearchQuery(parsedQuery, {
-      searchText: item.searchText,
-      domain: item.domain,
-      url: item.normalizedUrl || item.url,
-      path: item.path,
-      type: item.searchText,
-      dateAdded: item.dateAdded
-    })) {
-      return false
-    }
-
-    if (parsedQuery.textTerms.length && !parsedQuery.textTerms.every((term) => item.searchText.includes(term))) {
-      return false
-    }
-
-    if (
-      folderId &&
-      String(item.parentId || '') !== folderId &&
-      !(Array.isArray(item.ancestorIds) && item.ancestorIds.map(String).includes(folderId))
-    ) {
-      return false
-    }
-
-    if (domain && item.domain !== domain) {
-      return false
-    }
-
-    if (month && item.monthKey !== month) {
-      return false
-    }
-
-    return true
-  })
-}
-
-export function sortDashboardItems(
-  items: DashboardItem[],
-  sortKey: DashboardSortKey = 'date-desc'
-): DashboardItem[] {
-  return items.slice().sort((left, right) => {
-    if (sortKey === 'title-asc') {
-      return left.title.localeCompare(right.title, 'zh-CN') || compareDashboardItemPath(left, right)
-    }
-
-    if (sortKey === 'domain-asc') {
-      return left.domain.localeCompare(right.domain, 'zh-CN') || left.title.localeCompare(right.title, 'zh-CN')
-    }
-
-    if (sortKey === 'date-asc') {
-      return compareDashboardDates(left, right, 'asc') || compareDashboardItemPath(left, right)
-    }
-
-    return compareDashboardDates(left, right, 'desc') || compareDashboardItemPath(left, right)
-  })
-}
-
-export function getDashboardFolderTargets(folders: FolderRecord[]): DashboardFolderTarget[] {
-  return folders
-    .filter((folder) => String(folder.id) !== ROOT_ID)
-    .slice()
-    .sort(compareByPathTitle)
-    .map((folder) => ({
-      id: String(folder.id),
-      title: folder.title || '未命名文件夹',
-      path: folder.path || folder.title || '未命名文件夹',
-      normalizedPath: folder.normalizedPath || normalizeText(folder.path || folder.title || ''),
-      bookmarkCount: Number(folder.bookmarkCount) || 0,
-      folderCount: Number(folder.folderCount) || 0
-    }))
 }
 
 export function createDashboardDragState(
@@ -446,9 +245,6 @@ export function renderDashboardSection(): void {
   )
 
   dom.dashboardTotal.textContent = `(${model.totalBookmarks})`
-  dom.dashboardResultCount.textContent = visibleItems.length === model.items.length
-    ? `${visibleItems.length} 条书签`
-    : `${visibleItems.length} / ${model.items.length} 条书签`
   dom.dashboardStatus.innerHTML = availabilityState.deleting
     ? renderDashboardLoadingLabel('正在处理所选书签...', {
       loaderClass: 'dashboard-status-dot-loader'
@@ -457,6 +253,7 @@ export function renderDashboardSection(): void {
   dom.dashboardQuery.value = dashboardState.query
   renderDashboardSearchTools()
   renderDashboardFolderBreadcrumbs()
+  renderDashboardFolderSidebar(model)
 
   renderDashboardSelectionBar(visibleItems)
   renderDashboardCards(visibleItems)
@@ -582,7 +379,11 @@ export async function handleDashboardClick(event: Event, callbacks: DashboardCal
       const bookmarkId = String(actionButton.getAttribute('data-dashboard-bookmark-id') || '').trim()
       moveSingleDashboardItem(bookmarkId, callbacks)
     } else if (action === 'exit-dashboard') {
-      window.location.hash = '#general'
+      if (callbacks.exitDashboard) {
+        callbacks.exitDashboard()
+      } else {
+        window.location.hash = '#general'
+      }
     } else if (action === 'edit-tags') {
       const bookmarkId = String(actionButton.getAttribute('data-dashboard-bookmark-id') || '').trim()
       openDashboardTagEditor(bookmarkId)
@@ -1268,9 +1069,10 @@ export function getDashboardRenderData() {
     contentSnapshotSearchMap: contentSnapshotState.searchTextMap,
     includeFullText: contentSnapshotState.settings.fullTextSearchEnabled
   })
+  const effectiveFolderId = getDashboardEffectiveFolderId()
   const visibleItems = getCachedDashboardVisibleItems(model, {
     query: dashboardState.query,
-    folderId: dashboardState.folderId,
+    folderId: effectiveFolderId,
     domain: dashboardState.domain,
     month: dashboardState.month,
     sortKey: dashboardState.sortKey
@@ -1410,7 +1212,7 @@ function renderDashboardFolderBreadcrumbs(): void {
     return
   }
 
-  const selectedFolderId = String(dashboardState.folderId || '').trim()
+  const selectedFolderId = getDashboardEffectiveFolderId()
   const selectedFolder = selectedFolderId
     ? availabilityState.folderMap.get(selectedFolderId)
     : null
@@ -1429,14 +1231,7 @@ function buildDashboardFolderBreadcrumbMarkup(folder: FolderRecord): string {
 
   return `
     <ol class="dashboard-folder-breadcrumb-list">
-      <li>
-        <button
-          class="dashboard-folder-breadcrumb-link"
-          type="button"
-          data-dashboard-folder-filter=""
-        >全部书签</button>
-      </li>
-      ${segments.map((segment) => {
+      ${segments.map((segment, index) => {
         const content = segment.current || !segment.id
           ? `
             <span
@@ -1455,12 +1250,103 @@ function buildDashboardFolderBreadcrumbMarkup(folder: FolderRecord): string {
           `
 
         return `
-          <li class="dashboard-folder-breadcrumb-separator" aria-hidden="true">&gt;</li>
+          ${index === 0 ? '' : '<li class="dashboard-folder-breadcrumb-separator" aria-hidden="true">&gt;</li>'}
           <li>${content}</li>
         `
       }).join('')}
     </ol>
   `
+}
+
+function renderDashboardFolderSidebar(model: DashboardModel): void {
+  if (!dom.dashboardFolderTree || !dom.dashboardFolderSidebarCount) {
+    return
+  }
+
+  const selectedFolderId = getDashboardEffectiveFolderId()
+  const folderBookmarkCounts = getDashboardFolderBookmarkCounts(model)
+  dom.dashboardFolderSidebarCount.textContent = `${model.totalFolders} 个文件夹`
+
+  const folderMarkup = model.folderTargets
+    .map((folder) => {
+      const folderRecord = availabilityState.folderMap.get(String(folder.id))
+      const depth = Number(folderRecord?.depth) || getDashboardFolderPathDepth(folder.path)
+      return buildDashboardFolderSidebarItem({
+        id: folder.id,
+        title: folder.title,
+        path: formatFolderPath(folderRecord || folder, availabilityState.folderMap) || folder.path || folder.title,
+        count: folderBookmarkCounts.get(String(folder.id)) || 0,
+        depth: Math.max(0, depth - 1),
+        active: selectedFolderId === String(folder.id)
+      })
+    })
+    .join('')
+
+  dom.dashboardFolderTree.innerHTML = folderMarkup
+}
+
+function getDashboardFolderBookmarkCounts(model: DashboardModel): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const item of model.items) {
+    const folderIds = new Set<string>([
+      ...(Array.isArray(item.ancestorIds) ? item.ancestorIds.map(String) : []),
+      String(item.parentId || '')
+    ].filter(Boolean))
+    for (const folderId of folderIds) {
+      counts.set(folderId, (counts.get(folderId) || 0) + 1)
+    }
+  }
+  return counts
+}
+
+function buildDashboardFolderSidebarItem({
+  id,
+  title,
+  path,
+  count,
+  depth,
+  active
+}: {
+  id: string
+  title: string
+  path: string
+  count: number
+  depth: number
+  active: boolean
+}): string {
+  const clampedDepth = Math.min(Math.max(Number(depth) || 0, 0), 8)
+  const countLabel = `${Number(count) || 0} 个书签`
+  const countBadge = `${Number(count) || 0}`
+  const titleText = String(title || '未命名文件夹').trim() || '未命名文件夹'
+  const pathText = String(path || titleText).trim() || titleText
+  const currentAttribute = active ? ' aria-current="page"' : ''
+
+  return `
+    <button
+      class="dashboard-folder-tree-item ${active ? 'active' : ''}"
+      type="button"
+      role="treeitem"
+      data-dashboard-folder-filter="${escapeAttr(id)}"
+      data-dashboard-no-drag
+      aria-pressed="${active ? 'true' : 'false'}"
+     ${currentAttribute}
+      aria-label="${escapeAttr(`${pathText}，${countLabel}`)}"
+      title="${escapeAttr(pathText)}"
+      style="--folder-depth-offset: ${clampedDepth * 13}px;"
+    >
+      <span class="dashboard-folder-tree-branch" aria-hidden="true"></span>
+      <span class="dashboard-folder-tree-label">${escapeHtml(titleText)}</span>
+      <span class="dashboard-folder-tree-count" title="${escapeAttr(countLabel)}">${escapeHtml(countBadge)}</span>
+    </button>
+  `
+}
+
+function getDashboardFolderPathDepth(path: string): number {
+  return String(path || '')
+    .split(/\s*(?:\/|>|›|»|\\)\s*/g)
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .length
 }
 
 function renderDashboardSelectionBar(visibleItems: DashboardItem[]): void {
@@ -1485,13 +1371,26 @@ function applyDashboardFolderFilter(folderId: unknown): void {
     ? availabilityState.folderMap.get(normalizedFolderId)
     : null
 
-  dashboardState.folderId = selectedFolder ? normalizedFolderId : ''
+  dashboardState.folderId = selectedFolder ? normalizedFolderId : getDashboardDefaultFolderId()
   dashboardState.selectedIds.clear()
   dashboardState.expandedTagIds.clear()
   resetDashboardVirtualScroll()
   setDashboardStatus(selectedFolder
     ? `已筛选：${formatFolderPath(selectedFolder, availabilityState.folderMap) || selectedFolder.title}`
-    : '已显示全部书签')
+    : '已显示书签栏')
+}
+
+function getDashboardEffectiveFolderId(): string {
+  const selectedFolderId = String(dashboardState.folderId || '').trim()
+  if (selectedFolderId && availabilityState.folderMap.has(selectedFolderId)) {
+    return selectedFolderId
+  }
+
+  return getDashboardDefaultFolderId()
+}
+
+function getDashboardDefaultFolderId(): string {
+  return availabilityState.folderMap.has(BOOKMARKS_BAR_ID) ? BOOKMARKS_BAR_ID : ''
 }
 
 function renderDashboardCards(items: DashboardItem[]): void {
@@ -2210,62 +2109,6 @@ function suppressDashboardNativeSelection(event?: Event): void {
     event.preventDefault()
   }
   document.getSelection()?.removeAllRanges()
-}
-
-function getTopFolder(bookmark: BookmarkRecord, folderMap: Map<string, FolderRecord>): FolderRecord | null {
-  const ancestorIds = Array.isArray(bookmark.ancestorIds) ? bookmark.ancestorIds.map(String) : []
-  return folderMap.get(ancestorIds[0] || '') || folderMap.get(String(bookmark.parentId || '')) || null
-}
-
-function getDashboardDateMeta(value: unknown): { key: string; label: string; known: boolean } {
-  const timestamp = Number(value)
-  if (!Number.isFinite(timestamp) || timestamp <= 0) {
-    return {
-      key: 'unknown',
-      label: '未知时间',
-      known: false
-    }
-  }
-
-  const date = new Date(timestamp)
-  if (!Number.isFinite(date.getTime())) {
-    return {
-      key: 'unknown',
-      label: '未知时间',
-      known: false
-    }
-  }
-
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  return {
-    key: `${year}-${month}`,
-    label: formatDateTime(timestamp),
-    known: true
-  }
-}
-
-function normalizeDashboardTextList(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.map((item) => String(item || '').trim()).filter(Boolean)
-    : []
-}
-
-function compareDashboardDates(left: DashboardItem, right: DashboardItem, direction: 'asc' | 'desc'): number {
-  if (left.hasKnownDate !== right.hasKnownDate) {
-    return left.hasKnownDate ? -1 : 1
-  }
-  if (!left.hasKnownDate || !right.hasKnownDate) {
-    return 0
-  }
-
-  const leftDate = Number(left.dateAdded) || 0
-  const rightDate = Number(right.dateAdded) || 0
-  return direction === 'asc' ? leftDate - rightDate : rightDate - leftDate
-}
-
-function compareDashboardItemPath(left: DashboardItem, right: DashboardItem): number {
-  return compareByPathTitle(left, right) || left.title.localeCompare(right.title, 'zh-CN')
 }
 
 function getDashboardFaviconUrl(url: string): string {
