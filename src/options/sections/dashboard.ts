@@ -1267,7 +1267,7 @@ function buildDashboardFolderBreadcrumbMarkup(folder: FolderRecord): string {
 }
 
 function renderDashboardFolderSidebar(model: DashboardModel): void {
-  if (!dom.dashboardFolderSidebarList || !dom.dashboardFolderSidebarCount) {
+  if (!dom.dashboardFolderTree || !dom.dashboardFolderSidebarCount) {
     return
   }
 
@@ -1300,7 +1300,7 @@ function renderDashboardFolderSidebar(model: DashboardModel): void {
     })
     .join('')
 
-  dom.dashboardFolderSidebarList.innerHTML = allBookmarksMarkup + folderMarkup
+  dom.dashboardFolderTree.innerHTML = allBookmarksMarkup + folderMarkup
 }
 
 function getDashboardFolderBookmarkCounts(model: DashboardModel): Map<string, number> {
@@ -1333,26 +1333,28 @@ function buildDashboardFolderSidebarItem({
   active: boolean
 }): string {
   const clampedDepth = Math.min(Math.max(Number(depth) || 0, 0), 8)
-  const countLabel = `${Number(count) || 0}`
+  const countLabel = `${Number(count) || 0} 个书签`
+  const countBadge = `${Number(count) || 0}`
   const titleText = String(title || '未命名文件夹').trim() || '未命名文件夹'
   const pathText = String(path || titleText).trim() || titleText
   const currentAttribute = active ? ' aria-current="page"' : ''
 
   return `
     <button
-      class="dashboard-folder-sidebar-item ${active ? 'active' : ''}"
+      class="dashboard-folder-tree-item ${active ? 'active' : ''}"
       type="button"
+      role="treeitem"
       data-dashboard-folder-filter="${escapeAttr(id)}"
       data-dashboard-no-drag
       aria-pressed="${active ? 'true' : 'false'}"
      ${currentAttribute}
-      aria-label="${escapeAttr(`${pathText}，${countLabel} 条书签`)}"
+      aria-label="${escapeAttr(`${pathText}，${countLabel}`)}"
       title="${escapeAttr(pathText)}"
       style="--folder-depth-offset: ${clampedDepth * 13}px;"
     >
-      <span class="dashboard-folder-sidebar-branch" aria-hidden="true"></span>
-      <span class="dashboard-folder-sidebar-label">${escapeHtml(titleText)}</span>
-      <span class="dashboard-folder-sidebar-count">${escapeHtml(countLabel)}</span>
+      <span class="dashboard-folder-tree-branch" aria-hidden="true"></span>
+      <span class="dashboard-folder-tree-label">${escapeHtml(titleText)}</span>
+      <span class="dashboard-folder-tree-count" title="${escapeAttr(countLabel)}">${escapeHtml(countBadge)}</span>
     </button>
   `
 }
