@@ -1510,7 +1510,7 @@ body.bookmark-dragging .bookmark-tile:not(.dragging):focus-visible .bookmark-tit
   top: 0;
   right: 0;
   z-index: 30;
-  width: 96px;
+  width: 198px;
   height: 96px;
   pointer-events: none;
 }
@@ -1519,10 +1519,13 @@ body.bookmark-dragging .bookmark-tile:not(.dragging):focus-visible .bookmark-tit
   position: absolute;
   top: 18px;
   right: 18px;
-  display: grid;
-  width: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 40px;
   height: 40px;
-  place-items: center;
+  padding: 0 10px;
   border: 1px solid rgba(245, 245, 247, 0.12);
   border-radius: 8px;
   background: rgba(24, 24, 26, 0.72);
@@ -1541,7 +1544,18 @@ body.bookmark-dragging .bookmark-tile:not(.dragging):focus-visible .bookmark-tit
 
 .dashboard-trigger {
   right: 66px;
+  min-width: 124px;
+  padding: 0 12px;
   text-decoration: none;
+}
+
+.dashboard-trigger span {
+  color: currentColor;
+  font-size: 12px;
+  font-weight: 720;
+  letter-spacing: 0;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .settings-trigger:hover,
@@ -1586,6 +1600,7 @@ body.settings-trigger-auto-hide .settings-trigger[aria-expanded="true"] {
 
 .settings-trigger svg,
 .settings-close svg {
+  flex: 0 0 auto;
   width: 20px;
   height: 20px;
   fill: none;
@@ -3452,6 +3467,20 @@ body.settings-trigger-auto-hide .settings-trigger[aria-expanded="true"] {
   .settings-trigger {
     top: 12px;
     right: 12px;
+  }
+
+  .settings-trigger-zone {
+    width: 170px;
+  }
+
+  .dashboard-trigger {
+    right: 58px;
+    min-width: 112px;
+    padding: 0 10px;
+  }
+
+  .dashboard-trigger span {
+    font-size: 11px;
   }
 
   .settings-drawer {

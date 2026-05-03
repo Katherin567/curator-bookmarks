@@ -221,6 +221,7 @@ test('newtab exposes a lazy options dashboard iframe route', () => {
 
   assert.match(dashboardTrigger, /href="#dashboard"/)
   assert.match(dashboardTrigger, /aria-controls="newtab-dashboard-overlay"/)
+  assert.match(dashboardTrigger, />\s*书签仪表盘\s*<\/span>/)
   assert.match(dashboardOverlay, /\bhidden\b/)
   assert.match(dashboardOverlay, /aria-hidden="true"/)
   assert.match(dashboardFrame, /loading="lazy"/)
@@ -458,6 +459,8 @@ test('newtab dashboard glass layer only styles the iframe shell', () => {
   assert.match(newtabCss, /\.newtab-dashboard-surface\s*\{[\s\S]*?border-radius:\s*0/)
   assert.match(newtabCss, /\.newtab-dashboard-surface\s*\{[\s\S]*?backdrop-filter:\s*blur\(/)
   assert.match(newtabCss, /\.newtab-dashboard-frame\s*\{/)
+  assert.match(newtabCss, /\.dashboard-trigger\s*\{[\s\S]*?min-width:\s*124px/)
+  assert.match(newtabCss, /\.dashboard-trigger span\s*\{[\s\S]*?white-space:\s*nowrap/)
   assert.match(newtabCss, /@media \(prefers-reduced-motion: reduce\)/)
 
   assert.doesNotMatch(

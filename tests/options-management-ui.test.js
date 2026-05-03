@@ -81,15 +81,20 @@ test('dashboard fullscreen uses the compact top spacing for panel and toolbar', 
   const fullscreenPanelRule = getCssRuleBody(optionsCss, '.dashboard-fullscreen-active .dashboard-panel')
   const fullscreenToolbarRule = getCssRuleBody(optionsCss, '.dashboard-fullscreen-active .dashboard-toolbar')
   const panelPadding = getVerticalPadding(fullscreenPanelRule)
-  const toolbarPadding = getVerticalPadding(fullscreenToolbarRule)
 
   assert.ok(fullscreenPanelRule, 'fullscreen dashboard panel rule should exist')
   assert.ok(fullscreenToolbarRule, 'fullscreen dashboard toolbar rule should exist')
   assert.doesNotMatch(fullscreenPanelRule, /padding:\s*26px\s+clamp\(24px,\s*3\.4vw,\s*54px\)\s+30px/)
   assert.doesNotMatch(fullscreenToolbarRule, /padding:\s*12px\s+0\s+10px/)
   assert.ok(panelPadding.top < 26, 'fullscreen dashboard panel top padding should be tighter than the old value')
-  assert.ok(toolbarPadding.top < 12, 'fullscreen dashboard toolbar top padding should be tighter than the old value')
-  assert.ok(toolbarPadding.bottom < 10, 'fullscreen dashboard toolbar bottom padding should be tighter than the old value')
+  assert.match(
+    optionsCss,
+    /\.dashboard-fullscreen-active\s+\.dashboard-panel\s+\.dashboard-toolbar\s*\{[\s\S]*?justify-content:\s*center[\s\S]*?width:\s*min\(100%,\s*820px\)[\s\S]*?margin:\s*-52px\s+auto\s+0/
+  )
+  assert.match(
+    optionsCss,
+    /\.dashboard-fullscreen-active\s+\.dashboard-panel\s+\.detect-selection-group\s*\{[\s\S]*?width:\s*min\(100%,\s*820px\)[\s\S]*?backdrop-filter:\s*blur/
+  )
 })
 
 test('dashboard tag editor and tag popover have dialog semantics and keyboard path', () => {
