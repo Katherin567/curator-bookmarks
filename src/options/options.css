@@ -1178,14 +1178,17 @@ a {
 
 .dashboard-title-row {
   display: flex;
-  align-items: flex-end;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  margin-top: 10px;
+  gap: 12px;
+  margin-top: 4px;
 }
 
 .dashboard-title-row h1 {
+  margin-top: 4px;
   margin-bottom: 0;
+  font-size: 30px;
+  line-height: 1.08;
 }
 
 .dashboard-title-row h1 span {
@@ -1195,11 +1198,12 @@ a {
 }
 
 .dashboard-kicker {
-  margin: 0 0 8px;
+  margin: 0 0 3px;
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0;
+  line-height: 1.2;
   text-transform: uppercase;
 }
 
@@ -1222,9 +1226,10 @@ a {
 .dashboard-toolbar {
   display: grid;
   grid-template-columns: minmax(260px, 1fr) auto;
-  gap: 14px;
+  gap: 12px;
   align-items: end;
-  padding: 16px 18px;
+  margin-top: 12px;
+  padding: 12px 14px;
 }
 
 .dashboard-search {
@@ -1235,14 +1240,14 @@ a {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 7px;
   min-width: 0;
 }
 
 .dashboard-query-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
 }
 
@@ -1323,10 +1328,10 @@ a {
 }
 
 .dashboard-search-chip {
-  min-height: 26px;
+  min-height: 22px;
   display: inline-flex;
   align-items: center;
-  padding: 0 9px;
+  padding: 0 8px;
   border: 1px solid var(--surface-3);
   border-radius: 7px;
   background: var(--surface-1);
@@ -1360,7 +1365,7 @@ a {
   display: inline-flex;
   align-items: center;
   max-width: 220px;
-  min-height: 24px;
+  min-height: 22px;
   overflow: hidden;
   border-radius: 6px;
   padding: 0 6px;
@@ -1431,7 +1436,7 @@ a {
   grid-template-columns: minmax(260px, 500px) minmax(0, auto);
   align-items: end;
   justify-content: start;
-  gap: 14px;
+  gap: 12px;
 }
 
 .dashboard-panel .detect-selection-group .detect-results-actions {
@@ -1453,15 +1458,15 @@ a {
 }
 
 .dashboard-results-group {
-  margin-top: 16px;
-  padding: 16px 18px 20px;
+  margin-top: 10px;
+  padding: 12px 14px 16px;
 }
 
 .dashboard-results-head {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 14px;
+  gap: 10px;
 }
 
 .dashboard-results-head strong {
@@ -1481,7 +1486,7 @@ a {
   grid-auto-rows: 176px;
   align-items: stretch;
   gap: 10px;
-  margin-top: 14px;
+  margin-top: 10px;
   contain: layout paint;
 }
 
@@ -2448,7 +2453,7 @@ body.dashboard-fullscreen-active {
   min-height: 100vh;
   max-height: 100vh;
   overflow: hidden;
-  padding: 26px clamp(24px, 3.4vw, 54px) 30px;
+  padding: 12px clamp(18px, 2.6vw, 40px) 18px;
   border: 0;
   border-radius: 0;
   background: #080809;
@@ -2463,6 +2468,35 @@ body.dashboard-fullscreen-active {
 
 .dashboard-fullscreen-active .dashboard-title-row {
   flex: 0 0 auto;
+  gap: 8px;
+  margin-top: 0;
+}
+
+.dashboard-fullscreen-active .options-section-label,
+.options-dashboard-embed.dashboard-fullscreen-active .options-section-label {
+  font-size: 9px;
+  line-height: 1.1;
+}
+
+.dashboard-fullscreen-active .dashboard-kicker {
+  margin-bottom: 1px;
+  font-size: 9px;
+  line-height: 1.1;
+}
+
+.dashboard-fullscreen-active .dashboard-title-row h1 {
+  margin-top: 2px;
+  font-size: 24px;
+  line-height: 1.05;
+}
+
+.dashboard-fullscreen-active .dashboard-title-actions {
+  gap: 6px;
+  padding-top: 0;
+}
+
+.dashboard-fullscreen-active #dashboard-status {
+  min-height: 24px;
 }
 
 .dashboard-fullscreen-active .dashboard-toolbar,
@@ -2479,13 +2513,31 @@ body.dashboard-fullscreen-active {
 }
 
 .dashboard-fullscreen-active .dashboard-toolbar {
-  grid-template-columns: 520px auto;
+  grid-template-columns: minmax(360px, 500px) auto;
   justify-content: flex-start;
-  padding: 12px 0 10px;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 6px 0;
 }
 
 .dashboard-fullscreen-active .dashboard-search {
-  width: min(520px, 100%);
+  width: min(500px, 100%);
+}
+
+.dashboard-fullscreen-active .dashboard-search-box {
+  gap: 5px;
+}
+
+.dashboard-fullscreen-active .options-search-label {
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.dashboard-fullscreen-active .dashboard-search-chip,
+.dashboard-fullscreen-active .dashboard-folder-breadcrumb-link,
+.dashboard-fullscreen-active .dashboard-folder-breadcrumb-current {
+  min-height: 20px;
+  font-size: 11px;
 }
 
 .dashboard-fullscreen-active .dashboard-toolbar-actions {
@@ -2493,7 +2545,7 @@ body.dashboard-fullscreen-active {
 }
 
 .dashboard-fullscreen-active .dashboard-results-group {
-  margin-top: 8px;
+  margin-top: 4px;
   padding: 0;
 }
 
@@ -2510,7 +2562,7 @@ body.dashboard-fullscreen-active {
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   min-height: 0;
   overflow: auto;
-  margin-top: 10px;
+  margin-top: 6px;
   padding: 4px 4px 0 0;
 }
 
@@ -5191,6 +5243,88 @@ body.dashboard-fullscreen-active {
 .options-button.small {
   min-height: 32px;
   border-radius: 6px;
+}
+
+.dashboard-panel.options-panel {
+  padding-top: 0;
+}
+
+.dashboard-panel .options-section-label {
+  font-size: 10px;
+  line-height: 1.15;
+}
+
+.dashboard-panel .dashboard-title-row h1 {
+  margin-top: 4px;
+  font-size: 30px;
+  line-height: 1.08;
+}
+
+.dashboard-panel .dashboard-toolbar {
+  margin-top: 12px;
+  padding: 12px 14px;
+}
+
+.dashboard-panel .detect-selection-group {
+  margin-top: 8px;
+  padding: 12px 14px;
+}
+
+.dashboard-panel .dashboard-results-group {
+  margin-top: 10px;
+  padding: 12px 14px 16px;
+}
+
+.dashboard-fullscreen-active .dashboard-panel.options-panel {
+  padding: 12px clamp(18px, 2.6vw, 40px) 18px;
+}
+
+.dashboard-fullscreen-active .dashboard-title-row {
+  gap: 8px;
+  margin-top: 0;
+}
+
+.dashboard-fullscreen-active .dashboard-panel .options-section-label {
+  font-size: 9px;
+  line-height: 1.1;
+}
+
+.dashboard-fullscreen-active .dashboard-panel .dashboard-kicker {
+  margin-bottom: 1px;
+  font-size: 9px;
+  line-height: 1.1;
+}
+
+.dashboard-fullscreen-active .dashboard-panel .dashboard-title-row h1 {
+  margin-top: 2px;
+  font-size: 24px;
+  line-height: 1.05;
+}
+
+.dashboard-fullscreen-active .dashboard-panel .dashboard-toolbar {
+  grid-template-columns: minmax(360px, 500px) auto;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 6px 0;
+}
+
+.dashboard-fullscreen-active .dashboard-panel .dashboard-search-box {
+  gap: 5px;
+}
+
+.dashboard-fullscreen-active .dashboard-panel .options-search-label {
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.dashboard-fullscreen-active .dashboard-panel .detect-selection-group {
+  margin-top: 6px;
+  padding: 8px 0;
+}
+
+.dashboard-fullscreen-active .dashboard-panel .dashboard-results-group {
+  margin-top: 4px;
+  padding: 0;
 }
 
 .options-button.secondary {
