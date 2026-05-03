@@ -32,10 +32,29 @@
           <div class="options-nav-group">
             <p id="options-bookmark-nav-label" class="options-sidebar-label">书签管理</p>
             <nav class="options-nav" aria-labelledby="options-bookmark-nav-label">
-              <a class="options-nav-link" href="#availability" data-section-link="availability">书签可用性检测</a>
-              <a class="options-nav-link" href="#history" data-section-link="history">检测历史</a>
-              <a class="options-nav-link" href="#redirects" data-section-link="redirects">重定向更新</a>
-              <a class="options-nav-link" href="#ignore" data-section-link="ignore">忽略规则</a>
+              <div class="options-nav-collapsible" data-nav-group="availability-tools">
+                <button
+                  class="options-nav-group-trigger"
+                  type="button"
+                  aria-expanded="false"
+                  aria-controls="availability-tools-nav"
+                  data-nav-group-trigger="availability-tools"
+                >
+                  <span>可用性管理</span>
+                  <span class="options-nav-group-caret" aria-hidden="true"></span>
+                </button>
+                <div
+                  id="availability-tools-nav"
+                  class="options-nav-sublist"
+                  data-nav-group-panel="availability-tools"
+                  hidden
+                >
+                  <a class="options-nav-link options-nav-subitem" href="#availability" data-section-link="availability">书签可用性检测</a>
+                  <a class="options-nav-link options-nav-subitem" href="#history" data-section-link="history">检测历史</a>
+                  <a class="options-nav-link options-nav-subitem" href="#redirects" data-section-link="redirects">重定向更新</a>
+                  <a class="options-nav-link options-nav-subitem" href="#ignore" data-section-link="ignore">忽略规则</a>
+                </div>
+              </div>
               <a class="options-nav-link" href="#duplicates" data-section-link="duplicates">重复书签检测</a>
               <a class="options-nav-link" href="#folder-cleanup" data-section-link="folder-cleanup">文件夹清理</a>
               <a class="options-nav-link" href="#recycle" data-section-link="recycle">回收站</a>

@@ -263,6 +263,9 @@ const AVAILABILITY_FILTERS = new Set([
   'recovered',
   'ignored'
 ])
+const COLLAPSIBLE_NAV_GROUP_SECTIONS: Record<string, Set<string>> = {
+  'availability-tools': new Set(['availability', 'history', 'redirects', 'ignore'])
+}
 let confirmModalResolve: ((confirmed: boolean) => void) | null = null
 let activeManagedModalKey = ''
 let modalReturnFocusElement = null
@@ -465,6 +468,8 @@ function syncPageSection() {
     }
   })
 
+  syncCollapsibleNavGroups(key)
+
   panels.forEach((panel) => {
     panel.hidden = panel.getAttribute('data-section-panel') !== key
   })
@@ -480,6 +485,56 @@ function syncPageSection() {
   }
 
   scrollToSectionAnchor()
+}
+
+function syncCollapsibleNavGroups(activeSectionKey) {
+  Object.entries(COLLAPSIBLE_NAV_GROUP_SECTIONS).forEach(([groupKey, sectionKeys]) => {
+    const trigger = document.querySelector(
+      `[data-nav-group-trigger="${CSS.escape(groupKey)}"]`
+    ) as HTMLButtonElement | null
+    const panel = document.querySelector(
+      `[data-nav-group-panel="${CSS.escape(groupKey)}"]`
+    ) as HTMLElement | null
+    if (!trigger || !panel) {
+      return
+    }
+
+    const isActive = sectionKeys.has(String(activeSectionKey))
+    if (isActive) {
+      setCollapsibleNavGroupExpanded(trigger, panel, true)
+    } else {
+      setCollapsibleNavGroupExpanded(trigger, panel, trigger.getAttribute('aria-expanded') !== 'false')
+    }
+    trigger.classList.toggle('active', isActive)
+  })
+}
+
+function setCollapsibleNavGroupExpanded(trigger: HTMLButtonElement, panel: HTMLElement, expanded: boolean) {
+  trigger.setAttribute('aria-expanded', expanded ? 'true' : 'false')
+  trigger.classList.toggle('collapsed', !expanded)
+  panel.hidden = !expanded
+}
+
+function handleCollapsibleNavGroupClick(event) {
+  if (!(event.target instanceof Element)) {
+    return
+  }
+
+  const trigger = event.target.closest('[data-nav-group-trigger]') as HTMLButtonElement | null
+  if (!trigger) {
+    return
+  }
+
+  event.preventDefault()
+  const groupKey = String(trigger.getAttribute('data-nav-group-trigger') || '').trim()
+  const panel = document.querySelector(
+    `[data-nav-group-panel="${CSS.escape(groupKey)}"]`
+  ) as HTMLElement | null
+  if (!panel) {
+    return
+  }
+
+  setCollapsibleNavGroupExpanded(trigger, panel, trigger.getAttribute('aria-expanded') === 'false')
 }
 
 function handleSectionNavigationClick(event) {
@@ -564,6 +619,7 @@ function bindEvents() {
 
 
   document.addEventListener('click', handleSectionNavigationClick)
+  document.addEventListener('click', handleCollapsibleNavGroupClick)
   dom.availabilityScopeTrigger?.addEventListener('click', () => openScopeModal('availability'))
   dom.dashboardPanel?.addEventListener('click', (event) => {
     void handleDashboardClick(event, dashboardCallbacks)

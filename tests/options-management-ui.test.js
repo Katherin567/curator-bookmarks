@@ -166,6 +166,24 @@ test('availability toolbar exposes detection settings instead of summary copy', 
   assert.match(optionsSource, /STORAGE_KEYS\.availabilitySettings/)
 })
 
+test('availability management links are grouped under a collapsible sidebar title', () => {
+  const optionsHtml = readProjectFile('src/options/options.html')
+  const optionsSource = readProjectFile('src/options/options.ts')
+  const optionsCss = readProjectFile('src/options/options.css')
+
+  assert.match(optionsHtml, /data-nav-group="availability-tools"/)
+  assert.match(optionsHtml, /data-nav-group-trigger="availability-tools"[\s\S]*?可用性管理/)
+  assert.match(optionsHtml, /aria-expanded="false"/)
+  assert.match(optionsHtml, /id="availability-tools-nav"[\s\S]*?hidden/)
+  assert.match(optionsHtml, /data-nav-group-panel="availability-tools"[\s\S]*?data-section-link="availability"[\s\S]*?data-section-link="history"[\s\S]*?data-section-link="redirects"[\s\S]*?data-section-link="ignore"/)
+  assert.match(optionsSource, /COLLAPSIBLE_NAV_GROUP_SECTIONS/)
+  assert.match(optionsSource, /new Set\(\['availability', 'history', 'redirects', 'ignore'\]\)/)
+  assert.match(optionsSource, /function syncCollapsibleNavGroups/)
+  assert.match(optionsSource, /function handleCollapsibleNavGroupClick/)
+  assert.match(optionsCss, /\.options-nav-sublist/)
+  assert.match(optionsCss, /\.options-nav-group-caret/)
+})
+
 test('availability checks use adaptive runner with user settings', () => {
   const optionsHtml = readProjectFile('src/options/options.html')
   const optionsSource = readProjectFile('src/options/options.ts')
