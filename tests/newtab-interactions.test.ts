@@ -15,14 +15,14 @@ test('builds minimal bookmark move operations for a drag reorder', () => {
   assert.deepEqual(
     buildMinimalBookmarkMoveOperations(['a', 'b', 'c', 'd'], ['a', 'c', 'b', 'd'], 'folder-1'),
     [
-      { id: 'b', parentId: 'folder-1', index: 2 }
+      { id: 'b', parentId: 'folder-1', index: 3 }
     ]
   )
 
   assert.deepEqual(
     buildMinimalBookmarkMoveOperations(['a', 'b', 'c', 'd'], ['b', 'c', 'd', 'a'], 'folder-1'),
     [
-      { id: 'a', parentId: 'folder-1', index: 3 }
+      { id: 'a', parentId: 'folder-1', index: 4 }
     ]
   )
 
@@ -30,6 +30,22 @@ test('builds minimal bookmark move operations for a drag reorder', () => {
     buildMinimalBookmarkMoveOperations(['a', 'b', 'c', 'd'], ['d', 'a', 'b', 'c'], 'folder-1'),
     [
       { id: 'd', parentId: 'folder-1', index: 0 }
+    ]
+  )
+})
+
+test('emits Chrome bookmark move indexes for same-parent forward moves', () => {
+  assert.deepEqual(
+    buildMinimalBookmarkMoveOperations(['a', 'b', 'c', 'd'], ['b', 'a', 'c', 'd'], 'folder-1'),
+    [
+      { id: 'a', parentId: 'folder-1', index: 2 }
+    ]
+  )
+
+  assert.deepEqual(
+    buildMinimalBookmarkMoveOperations(['a', 'b', 'c', 'd'], ['b', 'c', 'a', 'd'], 'folder-1'),
+    [
+      { id: 'a', parentId: 'folder-1', index: 3 }
     ]
   )
 })

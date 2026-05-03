@@ -78,10 +78,11 @@ export function buildMinimalBookmarkMoveOperations(
 
     const [movedId] = current.splice(currentIndex, 1)
     current.splice(index, 0, movedId)
+    const chromeMoveIndex = currentIndex < index ? index + 1 : index
     operations.push({
       id: movedId,
       parentId: normalizedParentId,
-      index
+      index: chromeMoveIndex
     })
   }
 
