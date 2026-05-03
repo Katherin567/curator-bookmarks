@@ -218,6 +218,7 @@ test('newtab exposes a lazy original dashboard route', () => {
 
   assert.match(html, /id="newtab-dashboard-trigger"[\s\S]*href="#dashboard"/)
   assert.match(html, /id="newtab-dashboard-overlay"/)
+  assert.match(html, /id="newtab-dashboard-overlay"[\s\S]*hidden/)
   assert.match(html, /data-newtab-dashboard-root/)
   assert.match(script, /window\.location\.hash === '#dashboard'/)
   assert.match(script, /function ensureDashboardLoaded\(\): Promise<void>/)
@@ -417,6 +418,7 @@ test('newtab dashboard glass layer is scoped away from options dashboard styles'
 
   assert.match(newtabCss, /\.newtab-dashboard-overlay\s*\{[\s\S]*?position:\s*fixed/)
   assert.match(newtabCss, /\.newtab-dashboard-overlay\s*\{[\s\S]*?inset:\s*0/)
+  assert.match(newtabCss, /\.newtab-dashboard-overlay\[hidden\]\s*\{[\s\S]*?display:\s*none/)
   assert.match(newtabCss, /\.newtab-dashboard-surface\s*\{[\s\S]*?width:\s*min\(1180px,\s*100%\)/)
   assert.match(newtabCss, /\.newtab-dashboard-surface\s*\{[\s\S]*?backdrop-filter:\s*blur\(24px\)\s*saturate\(0\.92\)/)
   assert.match(newtabCss, /\.newtab-dashboard-surface \.dashboard-title-row\s*\{/)

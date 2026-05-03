@@ -757,6 +757,10 @@ body.background-mask-enabled .newtab-background-mask {
   background: rgba(0, 0, 0, 0.18);
 }
 
+.newtab-dashboard-overlay[hidden] {
+  display: none;
+}
+
 .newtab-dashboard-surface {
   --dashboard-surface-0: rgba(5, 5, 6, 0.68);
   --dashboard-surface-1: rgba(16, 16, 17, 0.62);
