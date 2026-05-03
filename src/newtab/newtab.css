@@ -1283,6 +1283,10 @@ body.bookmark-dragging .bookmark-tile:not(.dragging) {
     opacity var(--ease-standard);
 }
 
+body.bookmark-drag-preview-initializing .bookmark-tile {
+  transition: none !important;
+}
+
 body.bookmark-dragging .bookmark-tile:not(.dragging):hover,
 body.bookmark-dragging .bookmark-tile:not(.dragging):active,
 body.bookmark-dragging .bookmark-tile:not(.dragging):focus-visible {

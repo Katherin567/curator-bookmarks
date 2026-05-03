@@ -77,7 +77,6 @@ import {
   buildBookmarkOrderAfterInsert,
   buildMinimalBookmarkMoveOperations,
   resolveRestorableBookmarkParentId,
-  shouldInsertAfterBookmarkTile,
   validateBackgroundBlobSize,
   validateBackgroundContentLength
 } from './interactions.js'
@@ -1259,7 +1258,11 @@ function beginBookmarkDrag(): void {
   createBookmarkDragGhost(sourceTile)
   captureBookmarkDragLayout()
   sourceTile?.classList.add('dragging')
+  document.body.classList.add('bookmark-drag-preview-initializing')
   syncBookmarkDragVisualPreview()
+  window.requestAnimationFrame(() => {
+    document.body.classList.remove('bookmark-drag-preview-initializing')
+  })
 }
 
 function handleBookmarkPointerMove(event: PointerEvent): void {
@@ -1338,6 +1341,7 @@ function clearBookmarkDragState({ keepSuppressClick = false } = {}): void {
   state.dragPendingInsertIndex = -1
   removeBookmarkDragGhost()
   clearBookmarkDragVisualPreview()
+  document.body.classList.remove('bookmark-drag-preview-initializing')
   document.body.classList.remove('bookmark-dragging')
 
   if (keepSuppressClick) {
@@ -1368,10 +1372,12 @@ function createBookmarkDragGhost(sourceTile = getActiveDragTile()): void {
   copyBookmarkDragGhostVariables(sourceTile, ghost)
   ghost.style.width = `${rect.width}px`
   ghost.style.height = `${rect.height}px`
+  ghost.style.visibility = 'hidden'
   bookmarkDragGhost = ghost
   document.body.appendChild(ghost)
   syncBookmarkDragOffsetToGhostIcon(ghost, rect)
   updateBookmarkDragGhost({ immediate: true })
+  ghost.style.visibility = ''
 }
 
 function copyBookmarkDragGhostVariables(sourceTile: HTMLElement, ghost: HTMLElement): void {
@@ -1492,33 +1498,20 @@ function getBookmarkInsertIndex(clientX: number, clientY: number): number {
     return -1
   }
 
-  let closestCandidate: { id: string; rect: DOMRect } | null = null
-  let closestDistance = Number.POSITIVE_INFINITY
-  for (const candidate of candidates) {
-    const rect = candidate.rect
-    const centerX = rect.left + rect.width / 2
-    const centerY = rect.top + rect.height / 2
-    const distance = (clientX - centerX) ** 2 + (clientY - centerY) ** 2
-    if (distance < closestDistance) {
-      closestDistance = distance
-      closestCandidate = candidate
+  const row = getBookmarkDragTargetRow(candidates, clientY)
+  if (!row.length) {
+    return -1
+  }
+
+  for (const candidate of row) {
+    const centerX = candidate.rect.left + candidate.rect.width / 2
+    if (clientX < centerX) {
+      return candidates.indexOf(candidate)
     }
   }
 
-  if (!closestCandidate) {
-    return -1
-  }
-
-  const targetIndex = candidates.indexOf(closestCandidate)
-  if (targetIndex < 0) {
-    return -1
-  }
-
-  const insertAfter = shouldInsertAfterBookmarkTile(
-    { x: clientX, y: clientY },
-    closestCandidate.rect
-  )
-  return targetIndex + (insertAfter ? 1 : 0)
+  const lastCandidate = row[row.length - 1]
+  return candidates.indexOf(lastCandidate) + 1
 }
 
 function hasBookmarkInsertChange(insertIndex: number): boolean {
@@ -1601,6 +1594,50 @@ function getBookmarkDragLayoutCandidates(): Array<{ id: string; rect: DOMRect }>
       rect: tile.getBoundingClientRect()
     }))
     .filter((candidate) => candidate.id)
+}
+
+function getBookmarkDragTargetRow(
+  candidates: Array<{ id: string; rect: DOMRect }>,
+  clientY: number
+): Array<{ id: string; rect: DOMRect }> {
+  const rows: Array<Array<{ id: string; rect: DOMRect }>> = []
+  for (const candidate of candidates) {
+    const centerY = candidate.rect.top + candidate.rect.height / 2
+    const row = rows.find((items) => {
+      const first = items[0]
+      const firstCenterY = first.rect.top + first.rect.height / 2
+      return Math.abs(centerY - firstCenterY) <= Math.max(8, Math.min(first.rect.height, candidate.rect.height) * 0.5)
+    })
+    if (row) {
+      row.push(candidate)
+    } else {
+      rows.push([candidate])
+    }
+  }
+
+  for (const row of rows) {
+    row.sort((left, right) => left.rect.left - right.rect.left)
+  }
+  rows.sort((left, right) => left[0].rect.top - right[0].rect.top)
+
+  let closestRow: Array<{ id: string; rect: DOMRect }> | null = null
+  let closestDistance = Number.POSITIVE_INFINITY
+  for (const row of rows) {
+    const top = Math.min(...row.map((candidate) => candidate.rect.top))
+    const bottom = Math.max(...row.map((candidate) => candidate.rect.bottom))
+    const centerY = (top + bottom) / 2
+    const distance = clientY < top
+      ? top - clientY
+      : clientY > bottom
+        ? clientY - bottom
+        : Math.abs(clientY - centerY) * 0.2
+    if (distance < closestDistance) {
+      closestDistance = distance
+      closestRow = row
+    }
+  }
+
+  return closestRow || []
 }
 
 function syncBookmarkDragVisualPreview(): void {
