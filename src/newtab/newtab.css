@@ -1278,9 +1278,9 @@ body.folder-names-hidden.folder-order-dragging .folder-section-header-row {
 
 .bookmark-tile {
   --bookmark-card-rgb: 245 245 247;
-  --bookmark-card-bg-alpha: 0.04;
-  --bookmark-card-border-alpha: 0.08;
-  --bookmark-card-hover-alpha: 0.075;
+  --bookmark-card-bg-alpha: 0.3;
+  --bookmark-card-border-alpha: 0.1;
+  --bookmark-card-hover-alpha: 0.38;
   display: grid;
   width: 100%;
   min-height: calc(var(--icon-shell-size) + 18px);
@@ -1290,8 +1290,11 @@ body.folder-names-hidden.folder-order-dragging .folder-section-header-row {
   justify-self: stretch;
   padding: 8px 10px;
   border: 1px solid rgba(245, 245, 247, var(--bookmark-card-border-alpha));
-  border-radius: 7px;
-  background: rgba(245, 245, 247, var(--bookmark-card-bg-alpha));
+  border-radius: 8px;
+  background: rgba(8, 8, 9, var(--bookmark-card-bg-alpha));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
   color: var(--text);
   text-align: left;
   text-decoration: none;
@@ -1324,15 +1327,15 @@ body.folder-names-hidden.folder-order-dragging .folder-section-header-row {
 .bookmark-tile:hover,
 .bookmark-tile:focus-visible {
   border-color: rgba(245, 245, 247, 0.16);
-  background: rgba(245, 245, 247, var(--bookmark-card-hover-alpha));
-  box-shadow: none;
+  background: rgba(8, 8, 9, var(--bookmark-card-hover-alpha));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
   transform: translateY(-1px);
 }
 
 .bookmark-tile:active {
   border-color: rgba(245, 245, 247, 0.12);
-  background: rgba(245, 245, 247, 0.055);
-  box-shadow: none;
+  background: rgba(8, 8, 9, 0.44);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
   transform: translateY(1px) scale(0.985);
   transition-duration: 60ms;
 }
@@ -1356,8 +1359,8 @@ body.bookmark-dragging .bookmark-tile:not(.dragging):hover,
 body.bookmark-dragging .bookmark-tile:not(.dragging):active,
 body.bookmark-dragging .bookmark-tile:not(.dragging):focus-visible {
   border-color: rgba(245, 245, 247, var(--bookmark-card-border-alpha));
-  background: rgba(245, 245, 247, var(--bookmark-card-bg-alpha));
-  box-shadow: none;
+  background: rgba(8, 8, 9, var(--bookmark-card-bg-alpha));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
   transform: none;
 }
 
