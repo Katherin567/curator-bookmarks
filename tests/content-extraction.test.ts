@@ -48,6 +48,16 @@ test('skips direct page fetch without optional origin permission', () => {
   assert.match(decision.warning, /未授权访问 https:\/\/111\.com/)
 })
 
+test('skips direct page fetch for CORS-blocked pages until their origin is granted', () => {
+  const originPattern = getDirectPageFetchOriginPattern('https://linux.do/t/topic/1779614')
+  const decision = decideDirectPageFetch('https://linux.do/t/topic/1779614', false)
+
+  assert.equal(originPattern, 'https://linux.do/*')
+  assert.equal(decision.allowed, false)
+  assert.equal(decision.reason, 'missing-origin-permission')
+  assert.match(decision.warning, /未授权访问 https:\/\/linux\.do/)
+})
+
 test('allows direct page fetch only for http origins with granted permission', () => {
   assert.deepEqual(
     decideDirectPageFetch('chrome://extensions', true),
