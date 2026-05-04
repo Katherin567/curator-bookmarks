@@ -1761,6 +1761,7 @@ a {
 }
 
 .dashboard-card-grid {
+  position: relative;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   grid-auto-rows: 176px;
@@ -1773,7 +1774,48 @@ a {
 
 .dashboard-card-grid.is-updating {
   min-height: max(176px, var(--dashboard-results-stable-height, 176px));
-  content-visibility: auto;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.dashboard-card-grid.is-updating > * {
+  opacity: 0;
+}
+
+.dashboard-card-grid.is-updating::before,
+.dashboard-card-grid.is-updating::after {
+  position: absolute;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.dashboard-card-grid.is-updating::before {
+  content: "";
+  inset: 0;
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(18, 18, 20, 0.28), rgba(18, 18, 20, 0.18)),
+    rgba(8, 8, 10, 0.22);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+.dashboard-card-grid.is-updating::after {
+  content: "正在切换文件夹…";
+  top: clamp(24px, 18vh, 120px);
+  left: 50%;
+  transform: translateX(-50%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  padding: 8px 14px;
+  background: rgba(10, 10, 12, 0.72);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 760;
+  letter-spacing: 0;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 10px 30px rgba(0, 0, 0, 0.28);
 }
 
 .dashboard-card-grid.is-virtualized {

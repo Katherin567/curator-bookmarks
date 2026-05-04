@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import {
   shouldResetDashboardPanelRevealForRender,
@@ -18,6 +21,18 @@ test('dashboard folder switches do not reset the ready panel reveal', () => {
     shouldResetDashboardPanelRevealForRender({ catalogLoading: true, viewReady: true }),
     true
   )
+})
+
+test('dashboard folder switch update state masks partially rendered cards', () => {
+  const testDir = dirname(fileURLToPath(import.meta.url))
+  const cssPath = resolve(testDir, '../../src/options/options.css')
+  const css = readFileSync(cssPath, 'utf8')
+  const updatingRule = css.match(/\.dashboard-card-grid\.is-updating\s*\{[\s\S]*?\n\}/)?.[0] || ''
+
+  assert.doesNotMatch(updatingRule, /content-visibility/)
+  assert.match(css, /\.dashboard-card-grid\.is-updating\s*>\s*\*\s*\{[\s\S]*?opacity:\s*0/)
+  assert.match(css, /\.dashboard-card-grid\.is-updating::before/)
+  assert.match(css, /\.dashboard-card-grid\.is-updating::after/)
 })
 
 test('dashboard folder filter changes preserve virtual scroll reset state', () => {
