@@ -1589,6 +1589,7 @@ a {
 .dashboard-panel[data-dashboard-ready="false"] .detect-selection-group,
 .dashboard-panel[data-dashboard-ready="false"] .dashboard-results-group {
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
 }
 
