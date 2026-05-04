@@ -1,9 +1,9 @@
 :root {
   color-scheme: dark;
   --options-sidebar-width: 244px;
-  --options-brand-height: 124px;
+  --options-brand-height: 86px;
   --options-main-gutter: clamp(28px, 5vw, 88px);
-  --options-sidebar-gap: 28px;
+  --options-sidebar-gap: 18px;
   --options-content-max-width: 1120px;
   --bg: #000000;
   --surface-0: #111113;
@@ -418,7 +418,7 @@ a {
 
 .options-header {
   position: sticky;
-  top: 24px;
+  top: 0;
   z-index: 10;
   display: flex;
   align-items: flex-start;
@@ -429,7 +429,7 @@ a {
   grid-row: 1;
   margin: 0;
   min-height: var(--options-brand-height);
-  padding: 18px 16px 0;
+  padding: 14px 16px 0;
 }
 
 .options-brand {
@@ -437,7 +437,7 @@ a {
   align-items: center;
   gap: 12px;
   min-width: 0;
-  padding: 10px 0;
+  padding: 6px 0;
 }
 
 .options-brand-mark {
@@ -481,10 +481,11 @@ a {
 .options-brand-copy strong {
   display: block;
   color: var(--text-strong);
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 650;
   letter-spacing: 0;
   line-height: 1;
+  white-space: nowrap;
 }
 
 .options-main {
@@ -4946,7 +4947,7 @@ body.dashboard-fullscreen-active {
   }
 
   .options-brand-copy strong {
-    font-size: 26px;
+    font-size: 20px;
   }
 
   .options-panel {
