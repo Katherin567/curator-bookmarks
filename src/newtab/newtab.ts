@@ -39,6 +39,7 @@ import {
   createStateView,
   buildNewTabPortalOverview,
   collectPortalBookmarkSourceItems,
+  createLoadingStateView,
   getPortalQuickAccessItems,
   getNewTabSourceAnchorId,
   getSearchBookmarkSuggestionsFromIndex,
@@ -2590,7 +2591,8 @@ function render(): void {
   })
 
   if (contentState.type === 'loading') {
-    root.appendChild(createStateView('正在加载'))
+    root.appendChild(createNewTabLayout(createLoadingStateView()))
+    scheduleAdaptiveNewTabLayoutUpdate()
     return
   }
 
@@ -3027,11 +3029,7 @@ function createSearchWidget(): HTMLElement | null {
   suggestionsHeading.className = 'newtab-search-section-label'
   suggestionsHeading.textContent = '书签匹配'
 
-  const searchHint = document.createElement('div')
-  searchHint.className = 'newtab-search-hint'
-  searchHint.setAttribute('aria-live', 'polite')
-  searchHint.textContent = ''
-  suggestionsPanel.append(suggestionsHeading, suggestions, searchHint)
+  suggestionsPanel.append(suggestionsHeading, suggestions)
 
   let searchSuggestions: SearchBookmarkSuggestion[] = []
   let activeSuggestionIndex = -1
@@ -3040,7 +3038,6 @@ function createSearchWidget(): HTMLElement | null {
     searchSuggestions = []
     activeSuggestionIndex = -1
     suggestions.replaceChildren()
-    searchHint.textContent = ''
     suggestionsPanel.classList.add('hidden')
     input.setAttribute('aria-expanded', 'false')
     input.removeAttribute('aria-activedescendant')
@@ -3060,10 +3057,7 @@ function createSearchWidget(): HTMLElement | null {
         return
       }
 
-      searchHint.textContent = getEngineSearchHint(query)
-      suggestionsPanel.classList.remove('hidden')
-      suggestionsHeading.hidden = true
-      input.setAttribute('aria-expanded', 'true')
+      hideSuggestions()
       return
     }
 
@@ -3087,7 +3081,6 @@ function createSearchWidget(): HTMLElement | null {
     suggestionsPanel.classList.remove('hidden')
     suggestionsHeading.hidden = false
     input.setAttribute('aria-expanded', 'true')
-    searchHint.textContent = getSearchEnterHint(searchSuggestions[activeSuggestionIndex])
 
     if (activeSuggestionIndex >= 0) {
       input.setAttribute('aria-activedescendant', getSearchSuggestionElementId(activeSuggestionIndex))
@@ -3216,25 +3209,6 @@ function getSearchBookmarkSuggestions(query: string): SearchBookmarkSuggestion[]
     state.searchIndex,
     SEARCH_SUGGESTION_LIMIT
   )
-}
-
-function getSearchEnterHint(suggestion: SearchBookmarkSuggestion | undefined): string {
-  if (!suggestion) {
-    return getEngineSearchHint('')
-  }
-
-  return `Enter 打开「${suggestion.title}」；搜索图标使用 ${getCurrentSearchEngineName()} 搜索网页`
-}
-
-function getCurrentSearchEngineName(): string {
-  return SEARCH_ENGINE_CONFIG_BY_ID.get(state.searchSettings.engine)?.name || 'Google'
-}
-
-function getEngineSearchHint(query: string): string {
-  const engineName = getCurrentSearchEngineName()
-  const normalizedQuery = String(query || '').trim()
-  const queryText = normalizedQuery ? `：${normalizedQuery}` : ''
-  return `按 Enter 使用 ${engineName} 搜索${queryText}；Cmd/Ctrl+Enter 打开前 ${SEARCH_MULTI_OPEN_LIMIT} 个启用引擎`
 }
 
 function createSearchSuggestionButton(

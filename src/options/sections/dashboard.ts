@@ -131,7 +131,7 @@ const DASHBOARD_VIRTUAL_THRESHOLD = 120
 let dashboardStatusTimer = 0
 let dashboardTagRegenerateController: AbortController | null = null
 let closingDashboardTagEditor = false
-let dashboardViewReady = true
+let dashboardViewReady = false
 let dashboardViewRevealFrame = 0
 const dashboardRenderCache: DashboardRenderCache = {
   modelKey: null,
@@ -343,6 +343,9 @@ export function renderDashboardSection(): void {
     return
   }
 
+  if (availabilityState.catalogLoading) {
+    resetDashboardPanelReveal()
+  }
   const { model, visibleItems } = getDashboardRenderData()
   syncDashboardPanelReadyState()
 
@@ -369,10 +372,17 @@ export function renderDashboardSection(): void {
   renderDashboardSelectionBar(visibleItems)
   renderDashboardCards(visibleItems)
   renderDashboardTagEditor(model)
+  if (!availabilityState.catalogLoading) {
+    scheduleDashboardPanelReveal()
+  }
 
   if (dragState.active) {
     renderDashboardDragOverlay(model)
   }
+}
+
+export function isDashboardViewReady(): boolean {
+  return !availabilityState.catalogLoading && dashboardViewReady
 }
 
 export function handleDashboardInput(event: Event): void {
@@ -1485,8 +1495,7 @@ function applyDashboardFolderFilter(folderId: unknown): void {
   dashboardState.folderId = selectedFolder ? normalizedFolderId : getDashboardDefaultFolderId()
   dashboardState.selectedIds.clear()
   dashboardState.expandedTagIds.clear()
-  dashboardViewReady = false
-  syncDashboardPanelReadyState()
+  resetDashboardPanelReveal()
   resetDashboardVirtualScroll()
   setDashboardStatus(selectedFolder
     ? `已筛选：${formatFolderPath(selectedFolder, availabilityState.folderMap) || selectedFolder.title}`
@@ -1772,22 +1781,37 @@ function scheduleDashboardSectionRender(): void {
 function syncDashboardPanelReadyState(): void {
   dom.dashboardPanel?.setAttribute(
     'data-dashboard-ready',
-    !availabilityState.catalogLoading && dashboardViewReady ? 'true' : 'false'
+    isDashboardViewReady() ? 'true' : 'false'
   )
 }
 
 function scheduleDashboardPanelReveal(): void {
-  if (dashboardViewRevealFrame) {
-    window.cancelAnimationFrame(dashboardViewRevealFrame)
+  if (availabilityState.catalogLoading || dashboardViewReady || dashboardViewRevealFrame) {
+    return
   }
 
   dashboardViewRevealFrame = window.requestAnimationFrame(() => {
     dashboardViewRevealFrame = window.requestAnimationFrame(() => {
       dashboardViewRevealFrame = 0
+      if (availabilityState.catalogLoading) {
+        return
+      }
       dashboardViewReady = true
       syncDashboardPanelReadyState()
+      if (isDashboardViewReady()) {
+        window.dispatchEvent(new CustomEvent('curator:dashboard-view-ready'))
+      }
     })
   })
+}
+
+function resetDashboardPanelReveal(): void {
+  dashboardViewReady = false
+  if (dashboardViewRevealFrame) {
+    window.cancelAnimationFrame(dashboardViewRevealFrame)
+    dashboardViewRevealFrame = 0
+  }
+  syncDashboardPanelReadyState()
 }
 
 function resetDashboardVirtualScroll(): void {

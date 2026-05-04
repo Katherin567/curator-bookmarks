@@ -1,3 +1,5 @@
+import { renderDotMatrixLoader } from '../shared/dot-matrix-loader.js'
+
 export type NewTabContentState =
   | { type: 'loading' }
   | { type: 'error'; message: string }
@@ -757,5 +759,17 @@ export function createStateView(message: string, actionLabel = '', action?: () =
     view.appendChild(button)
   }
 
+  return view
+}
+
+export function createLoadingStateView(label = '正在加载书签'): HTMLElement {
+  const view = document.createElement('section')
+  view.className = 'newtab-state newtab-loading-state'
+  view.setAttribute('role', 'status')
+  view.setAttribute('aria-label', label)
+  view.innerHTML = renderDotMatrixLoader({
+    variant: 'spiral',
+    className: 'newtab-state-loader'
+  })
   return view
 }

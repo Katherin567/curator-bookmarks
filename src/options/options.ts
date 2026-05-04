@@ -243,6 +243,7 @@ import {
   handleDashboardPointerUp,
   handleDashboardTagPointerOut,
   handleDashboardTagPointerOver,
+  isDashboardViewReady,
   getSingleDashboardMoveBookmark,
   moveSingleDashboardBookmark,
   moveSelectedDashboardBookmarks,
@@ -389,6 +390,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     syncPageSection()
     resetOptionsScrollPosition()
   })
+  window.addEventListener('curator:dashboard-view-ready', notifyNewTabDashboardReady)
   void hydrateShortcutCommands()
 
   await hydratePersistentState()
@@ -521,7 +523,8 @@ function notifyNewTabDashboardReady(): void {
     !IS_OPTIONS_DASHBOARD_EMBED_MODE ||
     newTabDashboardReadyPosted ||
     normalizeSectionKey(getCurrentSectionKey()) !== 'dashboard' ||
-    availabilityState.catalogLoading
+    availabilityState.catalogLoading ||
+    !isDashboardViewReady()
   ) {
     return
   }
