@@ -15,6 +15,10 @@ import {
 import { deleteBookmarkToRecycle, removeRecycleEntry } from '../shared/recycle-bin.js'
 import { getLocalStorage, setLocalStorage } from '../shared/storage.js'
 import type { ExtractedBookmarkData, FolderRecord } from '../shared/types.js'
+import {
+  loadBookmarkTagIndex,
+  type BookmarkTagIndex
+} from '../shared/bookmark-tags.js'
 import { cancelExitMotion, closeWithExitMotion } from '../shared/motion.js'
 import {
   DEFAULT_ICON_SETTINGS,
@@ -109,6 +113,10 @@ import {
   normalizeTimeSettings,
   type NewTabTimeSettings
 } from './time-settings.js'
+import {
+  loadPopupSearchIndexSnapshotState,
+  type PopupSearchIndexSnapshotState
+} from '../popup/search-index.js'
 const FAVICON_SIZE = 64
 const FAVICON_COLOR_SAMPLE_SIZE = 32
 const CUSTOM_ICON_MAX_BYTES = 2 * 1024 * 1024
@@ -220,6 +228,8 @@ const state = {
   error: '',
   rootNode: null as chrome.bookmarks.BookmarkTreeNode | null,
   folderData: null as ExtractedBookmarkData | null,
+  bookmarkTagIndex: null as BookmarkTagIndex | null,
+  searchSnapshotState: null as PopupSearchIndexSnapshotState | null,
   folderNodeMap: new Map<string, chrome.bookmarks.BookmarkTreeNode>(),
   folderNode: null as chrome.bookmarks.BookmarkTreeNode | null,
   folderSections: [] as NewTabFolderSection[],
@@ -2440,7 +2450,7 @@ async function refreshNewTab(): Promise<void> {
   render()
 
   try {
-    const [tree, stored] = await Promise.all([
+    const [tree, stored, tagIndex, snapshotState] = await Promise.all([
       getBookmarkTree(),
       getLocalStorage([
         STORAGE_KEYS.newTabCustomIcons,
@@ -2452,7 +2462,9 @@ async function refreshNewTab(): Promise<void> {
         STORAGE_KEYS.newTabFolderSettings,
         STORAGE_KEYS.newTabTimeSettings,
         STORAGE_KEYS.newTabActivity
-      ])
+      ]),
+      loadBookmarkTagIndex().catch(() => null),
+      loadPopupSearchIndexSnapshotState().catch(() => null)
     ])
     const rootNode = tree[0] || null
     const folderData = extractBookmarkData(rootNode)
@@ -2465,6 +2477,8 @@ async function refreshNewTab(): Promise<void> {
 
     state.rootNode = rootNode
     state.folderData = folderData
+    state.bookmarkTagIndex = tagIndex
+    state.searchSnapshotState = snapshotState
     state.folderNodeMap = folderNodeMap
     state.folderSettings = folderSettings
     state.folderSections = folderSections
@@ -3268,7 +3282,7 @@ function formatSearchSuggestionUrl(url: string): string {
 }
 
 function openBookmarkSuggestion(suggestion: SearchBookmarkSuggestion): void {
-  const bookmark = getBookmarkById(suggestion.id)
+  const bookmark = state.allBookmarkMap.get(String(suggestion.id)) || getBookmarkById(suggestion.id)
   if (!bookmark) {
     openSearchTarget(suggestion.url)
     return
@@ -4023,7 +4037,11 @@ function refreshDerivedBookmarkState(): void {
   state.bookmarkMap = new Map(state.bookmarks.map((bookmark) => [String(bookmark.id), bookmark]))
   state.allBookmarks = buildAllBookmarks(state.rootNode)
   state.allBookmarkMap = new Map(state.allBookmarks.map((bookmark) => [String(bookmark.id), bookmark]))
-  state.searchIndex = buildNewTabSearchIndex(state.folderSections)
+  state.searchIndex = buildNewTabSearchIndex({
+    bookmarks: state.folderData?.bookmarks || extractBookmarkData(state.rootNode).bookmarks,
+    tagIndex: state.bookmarkTagIndex,
+    snapshotIndex: state.searchSnapshotState?.index || null
+  })
 }
 
 function getBookmarkById(bookmarkId: string): chrome.bookmarks.BookmarkTreeNode | null {
