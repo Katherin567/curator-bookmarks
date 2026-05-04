@@ -1,4 +1,20 @@
 import { renderDotMatrixLoader } from '../shared/dot-matrix-loader.js'
+import type { BookmarkTagIndex } from '../shared/bookmark-tags.js'
+import type { ContentSnapshotIndex } from '../shared/content-snapshots.js'
+import type { BookmarkRecord } from '../shared/types.js'
+import {
+  buildLightPopupSearchIndex
+} from '../popup/search-index.js'
+import {
+  searchBookmarks,
+  type PopupSearchBookmark
+} from '../popup/search.js'
+import {
+  buildLocalNaturalSearchPlan,
+  filterBookmarksByNaturalDateRange,
+  mergeNaturalSearchResultSets,
+  type NaturalSearchResultSet
+} from '../popup/natural-search.js'
 
 export type NewTabContentState =
   | { type: 'loading' }
@@ -36,6 +52,12 @@ export interface NewTabSearchIndexSection {
   bookmarks: NewTabSearchIndexBookmark[]
 }
 
+export interface NewTabSearchIndexSource {
+  bookmarks: BookmarkRecord[]
+  tagIndex?: BookmarkTagIndex | null
+  snapshotIndex?: ContentSnapshotIndex | null
+}
+
 export interface NewTabSourceNavigationSection {
   id: string
   title: string
@@ -61,6 +83,7 @@ export interface NewTabSearchIndexEntry {
   normalizedUrl: string
   normalizedFolderTitle: string
   order: number
+  searchBookmark?: PopupSearchBookmark
 }
 
 export interface SearchBookmarkSuggestion {
@@ -303,13 +326,21 @@ export function resolvePortalPanelLayout({
   return 'hidden'
 }
 
+export interface NewTabSearchSuggestionOptions {
+  now?: number
+}
+
 export function buildNewTabSearchIndex(
-  sections: NewTabSearchIndexSection[]
+  source: NewTabSearchIndexSection[] | NewTabSearchIndexSource
 ): NewTabSearchIndexEntry[] {
+  if (!Array.isArray(source)) {
+    return buildNewTabSearchIndexFromBookmarks(source)
+  }
+
   const entries: NewTabSearchIndexEntry[] = []
   let order = 0
 
-  for (const section of sections) {
+  for (const section of source) {
     const folderTitle = section.title || '未命名文件夹'
     const folderPath = section.path || section.title || ''
     const normalizedFolderTitle = normalizeNewTabSearchText(folderTitle)
@@ -337,6 +368,46 @@ export function buildNewTabSearchIndex(
   }
 
   return entries
+}
+
+function buildNewTabSearchIndexFromBookmarks({
+  bookmarks,
+  tagIndex = null,
+  snapshotIndex = null
+}: NewTabSearchIndexSource): NewTabSearchIndexEntry[] {
+  return buildLightPopupSearchIndex({
+    bookmarks,
+    tagIndex,
+    snapshotIndex
+  })
+    .map((bookmark, order): NewTabSearchIndexEntry | null => {
+      const url = String(bookmark.url || '').trim()
+      if (!url) {
+        return null
+      }
+
+      const title = String(bookmark.title || '').trim() || url
+      const folderPath = String(bookmark.path || '').trim()
+      const folderTitle = getNewTabSearchFolderTitle(folderPath)
+      return {
+        id: String(bookmark.id),
+        title,
+        url,
+        folderTitle,
+        folderPath,
+        normalizedTitle: normalizeNewTabSearchText(title),
+        normalizedUrl: normalizeNewTabSearchText(url),
+        normalizedFolderTitle: normalizeNewTabSearchText(folderTitle),
+        order,
+        searchBookmark: bookmark
+      }
+    })
+    .filter((entry): entry is NewTabSearchIndexEntry => Boolean(entry))
+}
+
+function getNewTabSearchFolderTitle(path: string): string {
+  const parts = String(path || '').split('/').map((part) => part.trim()).filter(Boolean)
+  return parts.at(-1) || '未归档路径'
 }
 
 export function buildNewTabSourceNavigationItems(
@@ -372,11 +443,17 @@ export function getNewTabSourceAnchorId(sourceId: string): string {
 export function getSearchBookmarkSuggestionsFromIndex(
   query: string,
   index: NewTabSearchIndexEntry[],
-  limit: number
+  limit: number,
+  options: NewTabSearchSuggestionOptions = {}
 ): SearchBookmarkSuggestion[] {
   const normalizedQuery = normalizeNewTabSearchText(query)
   if (!normalizedQuery || limit <= 0) {
     return []
+  }
+
+  const popupSuggestions = getPopupSearchBookmarkSuggestionsFromIndex(query, index, limit, options)
+  if (popupSuggestions) {
+    return popupSuggestions
   }
 
   const suggestions: SearchBookmarkSuggestion[] = []
@@ -404,6 +481,79 @@ export function getSearchBookmarkSuggestionsFromIndex(
 
   return suggestions
     .sort((left, right) => left.score - right.score || left.order - right.order)
+    .slice(0, limit)
+}
+
+function getPopupSearchBookmarkSuggestionsFromIndex(
+  query: string,
+  index: NewTabSearchIndexEntry[],
+  limit: number,
+  options: NewTabSearchSuggestionOptions
+): SearchBookmarkSuggestion[] | null {
+  const searchBookmarksById = new Map<string, PopupSearchBookmark>()
+  const entriesById = new Map<string, NewTabSearchIndexEntry>()
+  for (const entry of index) {
+    if (!entry.searchBookmark) {
+      return null
+    }
+
+    searchBookmarksById.set(entry.id, entry.searchBookmark)
+    entriesById.set(entry.id, entry)
+  }
+
+  if (!searchBookmarksById.size) {
+    return []
+  }
+
+  const plan = buildLocalNaturalSearchPlan(query, options.now)
+  const bookmarks = filterBookmarksByNaturalDateRange([...searchBookmarksById.values()], plan)
+  const resultSets: NaturalSearchResultSet[] = []
+  const seenQueries = new Set<string>()
+
+  const directQuery = normalizeNewTabSearchText(query)
+  if (directQuery) {
+    const directResults = searchBookmarks(query, bookmarks)
+    if (directResults.length) {
+      resultSets.push({ query, results: directResults })
+      seenQueries.add(directQuery)
+    }
+  }
+
+  for (const naturalQuery of plan.queries) {
+    const normalizedNaturalQuery = normalizeNewTabSearchText(naturalQuery)
+    if (!normalizedNaturalQuery || seenQueries.has(normalizedNaturalQuery)) {
+      continue
+    }
+
+    seenQueries.add(normalizedNaturalQuery)
+    const results = searchBookmarks(naturalQuery, bookmarks)
+    if (results.length) {
+      resultSets.push({ query: naturalQuery, results })
+    }
+  }
+
+  if (!resultSets.length) {
+    return []
+  }
+
+  return mergeNaturalSearchResultSets(plan, resultSets)
+    .map((result) => {
+      const entry = entriesById.get(result.id)
+      if (!entry) {
+        return null
+      }
+
+      return {
+        id: entry.id,
+        title: entry.title,
+        url: entry.url,
+        folderTitle: entry.folderTitle,
+        folderPath: entry.folderPath,
+        score: result.score,
+        order: entry.order
+      }
+    })
+    .filter((suggestion): suggestion is SearchBookmarkSuggestion => Boolean(suggestion))
     .slice(0, limit)
 }
 
