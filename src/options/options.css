@@ -1278,15 +1278,27 @@ a {
 }
 
 .dashboard-title-actions {
-  display: inline-flex;
+  --dashboard-status-width: clamp(132px, 22vw, 360px);
+  display: grid;
+  grid-template-columns: minmax(0, var(--dashboard-status-width)) auto;
   align-items: center;
   justify-content: flex-end;
-  flex-wrap: wrap;
   gap: 10px;
+  min-width: min(100%, calc(var(--dashboard-status-width) + 92px));
 }
 
 #dashboard-status {
+  width: var(--dashboard-status-width);
+  min-width: 0;
+  justify-content: flex-end;
+  overflow: hidden;
   padding-left: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#dashboard-status:empty {
+  visibility: hidden;
 }
 
 #dashboard-status::before {
@@ -1455,29 +1467,44 @@ a {
 
 .dashboard-folder-breadcrumbs {
   min-width: 0;
+  min-height: 22px;
+  overflow: hidden;
   color: var(--text-soft);
 }
 
 .dashboard-folder-breadcrumb-list {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 5px;
   min-width: 0;
   margin: 0;
+  overflow: hidden;
   padding: 0;
   list-style: none;
 }
 
 .dashboard-folder-breadcrumb-list li {
+  display: inline-flex;
+  flex: 0 1 auto;
   min-width: 0;
+}
+
+.dashboard-folder-breadcrumb-list li:last-child {
+  flex: 1 1 auto;
+}
+
+.dashboard-folder-breadcrumb-separator {
+  flex: 0 0 auto;
 }
 
 .dashboard-folder-breadcrumb-link,
 .dashboard-folder-breadcrumb-current {
   display: inline-flex;
   align-items: center;
+  flex: 0 1 auto;
   max-width: 220px;
+  min-width: 0;
   min-height: 22px;
   overflow: hidden;
   border-radius: 6px;
@@ -1819,7 +1846,8 @@ a {
 
 .dashboard-card-grid.is-updating {
   min-height: max(176px, var(--dashboard-results-stable-height, 176px));
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   pointer-events: none;
 }
 

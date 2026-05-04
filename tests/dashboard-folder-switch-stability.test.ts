@@ -56,9 +56,33 @@ test('dashboard folder switch update state masks partially rendered cards', () =
   const updatingRule = css.match(/\.dashboard-card-grid\.is-updating\s*\{[\s\S]*?\n\}/)?.[0] || ''
 
   assert.doesNotMatch(updatingRule, /content-visibility/)
+  assert.doesNotMatch(updatingRule, /overflow:\s*hidden/)
+  assert.match(updatingRule, /overflow-x:\s*hidden/)
+  assert.match(updatingRule, /overflow-y:\s*auto/)
+  assert.match(css, /\.dashboard-card-grid\s*\{[\s\S]*?scrollbar-gutter:\s*stable/)
   assert.match(css, /\.dashboard-card-grid\.is-updating\s*>\s*\*\s*\{[\s\S]*?opacity:\s*0/)
   assert.match(css, /\.dashboard-card-grid\.is-updating::before/)
   assert.match(css, /\.dashboard-card-grid\.is-updating::after/)
+})
+
+test('dashboard folder switch chrome keeps text layout stable', () => {
+  const testDir = dirname(fileURLToPath(import.meta.url))
+  const cssPath = resolve(testDir, '../../src/options/options.css')
+  const css = readFileSync(cssPath, 'utf8')
+  const titleActionsRule = css.match(/\.dashboard-title-actions\s*\{[\s\S]*?\n\}/)?.[0] || ''
+  const statusRule = css.match(/#dashboard-status\s*\{[\s\S]*?\n\}/)?.[0] || ''
+  const breadcrumbRule = css.match(/\.dashboard-folder-breadcrumb-list\s*\{[\s\S]*?\n\}/)?.[0] || ''
+
+  assert.match(titleActionsRule, /grid-template-columns:\s*minmax\(0,\s*var\(--dashboard-status-width\)\)\s+auto/)
+  assert.match(statusRule, /width:\s*var\(--dashboard-status-width\)/)
+  assert.match(statusRule, /overflow:\s*hidden/)
+  assert.match(statusRule, /text-overflow:\s*ellipsis/)
+  assert.match(statusRule, /white-space:\s*nowrap/)
+  assert.match(css, /#dashboard-status:empty\s*\{[\s\S]*?visibility:\s*hidden/)
+  assert.match(css, /\.dashboard-folder-breadcrumbs\s*\{[\s\S]*?min-height:\s*22px/)
+  assert.match(breadcrumbRule, /flex-wrap:\s*nowrap/)
+  assert.match(breadcrumbRule, /overflow:\s*hidden/)
+  assert.match(css, /\.dashboard-folder-breadcrumb-list\s+li:last-child\s*\{[\s\S]*?flex:\s*1\s+1\s+auto/)
 })
 
 test('dashboard initial reveal waits for the latest committed card render', () => {
