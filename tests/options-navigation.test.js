@@ -84,6 +84,7 @@ test('options shell keeps brand and sidebar fixed while the main settings area s
   assert.doesNotMatch(shellRule, /justify-content:\s*center/)
   assert.match(optionsCss, /\.options-header\s*\{[\s\S]*?position:\s*sticky[\s\S]*?top:\s*0[\s\S]*?width:\s*100%[\s\S]*?min-height:\s*var\(--options-brand-height\)[\s\S]*?padding:\s*14px\s+16px\s+0/)
   assert.match(optionsCss, /\.options-brand\s*\{[\s\S]*?padding:\s*6px\s+0/)
+  assert.match(optionsCss, /\.options-brand-eyebrow\s*\{[\s\S]*?font-size:\s*9px[\s\S]*?white-space:\s*nowrap/)
   assert.match(optionsCss, /\.options-brand-copy strong\s*\{[\s\S]*?font-size:\s*17px[\s\S]*?white-space:\s*nowrap/)
   assert.match(optionsCss, /\.options-layout\s*\{[\s\S]*?grid-template-columns:\s*var\(--options-sidebar-width\)\s+minmax\(0,\s*1fr\)[\s\S]*?gap:\s*0[\s\S]*?height:\s*100%[\s\S]*?pointer-events:\s*none/)
   assert.match(optionsCss, /\.options-sidebar\s*\{[\s\S]*?position:\s*sticky[\s\S]*?top:\s*calc\(var\(--options-brand-height\) \+ var\(--options-sidebar-gap\)\)[\s\S]*?max-height:\s*calc\(100vh - var\(--options-brand-height\) - var\(--options-sidebar-gap\) - 24px\)[\s\S]*?margin-top:\s*var\(--options-sidebar-gap\)[\s\S]*?pointer-events:\s*auto/)

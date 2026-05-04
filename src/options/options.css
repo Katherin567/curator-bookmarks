@@ -473,9 +473,10 @@ a {
 
 .options-brand-eyebrow {
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: 9px;
   font-weight: 600;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .options-brand-copy strong {
