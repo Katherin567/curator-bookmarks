@@ -3,6 +3,7 @@ import { test } from 'node:test'
 
 import {
   BACKGROUND_URL_MAX_BYTES,
+  applyBookmarkMoveOperationsToChildren,
   buildBookmarkOrderAfterInsert,
   buildMinimalBookmarkMoveOperations,
   resolveRestorableBookmarkParentId,
@@ -106,6 +107,56 @@ test('keeps bookmark order unchanged for invalid or same-slot pending inserts', 
   assert.deepEqual(
     buildBookmarkOrderAfterInsert(order, 'b', 1),
     order
+  )
+})
+
+test('applies Chrome bookmark move operations to local children without full reload', () => {
+  const children: chrome.bookmarks.BookmarkTreeNode[] = [
+    { id: 'a', parentId: 'folder-1', title: 'A', url: 'https://a.test/', index: 0 },
+    { id: 'nested-folder', parentId: 'folder-1', title: 'Nested', children: [], index: 1 },
+    { id: 'b', parentId: 'folder-1', title: 'B', url: 'https://b.test/', index: 2 },
+    { id: 'c', parentId: 'folder-1', title: 'C', url: 'https://c.test/', index: 3 }
+  ]
+
+  const moved = applyBookmarkMoveOperationsToChildren(children, [
+    { id: 'a', parentId: 'folder-1', index: 3 }
+  ])
+
+  assert.deepEqual(
+    moved?.map((child) => child.id),
+    ['nested-folder', 'b', 'a', 'c']
+  )
+  assert.deepEqual(
+    moved?.map((child) => child.index),
+    [0, 1, 2, 3]
+  )
+  assert.deepEqual(
+    children.map((child) => child.id),
+    ['a', 'nested-folder', 'b', 'c']
+  )
+})
+
+test('rejects invalid Chrome bookmark move operations for local sync fallback', () => {
+  const children: chrome.bookmarks.BookmarkTreeNode[] = [
+    { id: 'a', parentId: 'folder-1', title: 'A', url: 'https://a.test/' },
+    { id: 'nested-folder', parentId: 'folder-1', title: 'Nested', children: [] }
+  ]
+
+  assert.equal(
+    applyBookmarkMoveOperationsToChildren(children, [{ id: 'missing', parentId: 'folder-1', index: 0 }]),
+    null
+  )
+  assert.equal(
+    applyBookmarkMoveOperationsToChildren(children, [{ id: 'nested-folder', parentId: 'folder-1', index: 0 }]),
+    null
+  )
+  assert.equal(
+    applyBookmarkMoveOperationsToChildren(children, [{ id: 'a', parentId: 'other-folder', index: 0 }]),
+    null
+  )
+  assert.equal(
+    applyBookmarkMoveOperationsToChildren(undefined, [{ id: 'a', parentId: 'folder-1', index: 0 }]),
+    null
   )
 })
 

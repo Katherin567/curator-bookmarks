@@ -1299,6 +1299,14 @@ body.background-mask-enabled .newtab-background-mask {
   opacity: 0.54;
 }
 
+.bookmark-reorder-status {
+  margin: 6px 0 0;
+  color: rgba(255, 214, 179, 0.88);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
 .folder-section-header-row {
   display: inline-flex;
   max-width: min(560px, 100%);

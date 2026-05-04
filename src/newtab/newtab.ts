@@ -78,10 +78,12 @@ import {
 import {
   BACKGROUND_URL_FETCH_TIMEOUT_MS,
   BACKGROUND_URL_MAX_BYTES,
+  applyBookmarkMoveOperationsToChildren,
   buildBookmarkOrderAfterInsert,
   buildMinimalBookmarkMoveOperations,
   resolveRestorableBookmarkParentId,
   resolveBookmarkDragInsertIndex,
+  type BookmarkMoveOperation,
   type BookmarkDragSlotRectLike,
   validateBackgroundBlobSize,
   validateBackgroundContentLength
@@ -278,6 +280,9 @@ const state = {
   folderDragOriginalOrderIds: [] as string[],
   folderDragSuppressClick: false,
   reorderingBookmarks: false,
+  selfBookmarkMoveIds: new Set<string>(),
+  selfBookmarkMoveSuppressUntil: 0,
+  bookmarkReorderError: '',
   backgroundSettings: { ...DEFAULT_BACKGROUND_SETTINGS },
   searchSettings: { ...DEFAULT_SEARCH_SETTINGS },
   iconSettings: { ...DEFAULT_ICON_SETTINGS },
@@ -485,7 +490,7 @@ function bindEvents(): void {
   chrome.bookmarks?.onCreated?.addListener(handleBookmarksChanged)
   chrome.bookmarks?.onRemoved?.addListener(handleBookmarksChanged)
   chrome.bookmarks?.onChanged?.addListener(handleBookmarksChanged)
-  chrome.bookmarks?.onMoved?.addListener(handleBookmarksChanged)
+  chrome.bookmarks?.onMoved?.addListener(handleBookmarkMoved)
 
   window.clearTimeout(clockTimer)
   scheduleClockTick()
@@ -1780,17 +1785,69 @@ async function persistBookmarkOrder(
   }
 
   state.reorderingBookmarks = true
+  state.selfBookmarkMoveIds = new Set(operations.map((operation) => operation.id))
+  state.selfBookmarkMoveSuppressUntil = Date.now() + 1500
+  state.bookmarkReorderError = ''
+  syncBookmarkReorderBusyState()
   try {
     for (const operation of operations) {
       await moveBookmark(operation.id, operation.parentId, operation.index)
     }
-    await refreshNewTab()
+
+    if (!syncPersistedBookmarkOrderInState(folderId, operations, finalBookmarkIds)) {
+      await refreshNewTab()
+    }
   } catch (error) {
-    state.error = error instanceof Error ? error.message : '书签排序保存失败，请刷新后重试。'
+    const message = error instanceof Error ? error.message : '书签排序保存失败，请刷新后重试。'
     await refreshNewTab()
+    state.bookmarkReorderError = message
+    render()
+    updateClockText()
   } finally {
     state.reorderingBookmarks = false
+    syncBookmarkReorderBusyState()
   }
+}
+
+function syncPersistedBookmarkOrderInState(
+  folderId: string,
+  operations: BookmarkMoveOperation[],
+  finalBookmarkIds: string[]
+): boolean {
+  const folderNode = state.folderNodeMap.get(folderId) || null
+  const nextChildren = applyBookmarkMoveOperationsToChildren(folderNode?.children, operations)
+  if (!folderNode || !nextChildren) {
+    return false
+  }
+
+  const nextBookmarkIds = nextChildren
+    .filter((child) => Boolean(child.url))
+    .map((child) => String(child.id))
+  if (!areStringArraysEqual(nextBookmarkIds, finalBookmarkIds)) {
+    return false
+  }
+
+  folderNode.children = nextChildren
+  state.folderData = extractBookmarkData(state.rootNode)
+  state.folderNodeMap = buildFolderNodeMap(state.rootNode)
+  state.folderSections = buildNewTabFolderSections(
+    state.rootNode,
+    state.folderSettings,
+    state.folderData,
+    state.folderNodeMap
+  )
+  refreshDerivedBookmarkState()
+  render()
+  updateClockText()
+  return true
+}
+
+function syncBookmarkReorderBusyState(): void {
+  const busy = state.reorderingBookmarks ? 'true' : 'false'
+  document.querySelector<HTMLElement>('.newtab-content')?.setAttribute('aria-busy', busy)
+  document.querySelectorAll<HTMLElement>('.bookmark-grid').forEach((grid) => {
+    grid.setAttribute('aria-busy', busy)
+  })
 }
 
 function handleFolderPointerDown(event: PointerEvent): void {
@@ -2132,6 +2189,32 @@ function handleBookmarksChanged(): void {
   void refreshNewTab()
 }
 
+function handleBookmarkMoved(bookmarkId: string): void {
+  if (isSelfBookmarkMoveEvent(bookmarkId)) {
+    return
+  }
+
+  handleBookmarksChanged()
+}
+
+function isSelfBookmarkMoveEvent(bookmarkId: string): boolean {
+  const normalizedBookmarkId = String(bookmarkId || '').trim()
+  if (
+    normalizedBookmarkId &&
+    state.selfBookmarkMoveIds.has(normalizedBookmarkId) &&
+    Date.now() <= state.selfBookmarkMoveSuppressUntil
+  ) {
+    state.selfBookmarkMoveIds.delete(normalizedBookmarkId)
+    return true
+  }
+
+  if (Date.now() > state.selfBookmarkMoveSuppressUntil) {
+    state.selfBookmarkMoveIds.clear()
+  }
+
+  return state.reorderingBookmarks
+}
+
 function isActiveMenuBookmarkPinned(): boolean {
   const bookmark = getActiveMenuBookmark()
   return Boolean(bookmark && state.activity.pinnedIds.includes(String(bookmark.id)))
@@ -2437,6 +2520,7 @@ async function saveAddedBookmark(): Promise<void> {
 async function refreshNewTab(): Promise<void> {
   state.loading = true
   state.error = ''
+  state.bookmarkReorderError = ''
   render()
 
   try {
@@ -3354,6 +3438,7 @@ function createBookmarkSections(sections: NewTabFolderSection[]): HTMLElement {
   view.dataset.iconLayoutMode = state.iconSettings.layoutMode
   view.dataset.iconShowTitles = String(state.iconSettings.showTitles)
   view.dataset.iconVerticalCenter = String(state.iconSettings.verticalCenter)
+  view.setAttribute('aria-busy', state.reorderingBookmarks ? 'true' : 'false')
 
   const portal = createPortalPanel()
   if (portal) {
@@ -3409,6 +3494,7 @@ function createBookmarkSections(sections: NewTabFolderSection[]): HTMLElement {
       list.className = 'bookmark-grid'
       list.dataset.bookmarkGridFolderId = section.id
       list.setAttribute('aria-label', `${section.title || '文件夹'}书签`)
+      list.setAttribute('aria-busy', state.reorderingBookmarks ? 'true' : 'false')
 
       for (const bookmark of section.bookmarks) {
         list.appendChild(createBookmarkTile(bookmark, section.id, renderedBookmarkIndex))
@@ -3424,6 +3510,14 @@ function createBookmarkSections(sections: NewTabFolderSection[]): HTMLElement {
     }
 
     groupList.appendChild(sectionNode)
+  }
+
+  if (state.bookmarkReorderError) {
+    const error = document.createElement('p')
+    error.className = 'bookmark-reorder-status'
+    error.setAttribute('role', 'status')
+    error.textContent = state.bookmarkReorderError
+    groupList.appendChild(error)
   }
 
   view.appendChild(groupList)
