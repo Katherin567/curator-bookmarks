@@ -344,6 +344,16 @@ export function shouldResetDashboardPanelRevealForRender({
   return Boolean(catalogLoading && viewReady)
 }
 
+export function shouldResetDashboardPanelRevealForSectionEntry({
+  previousSectionKey,
+  nextSectionKey
+}: {
+  previousSectionKey: string
+  nextSectionKey: string
+}): boolean {
+  return previousSectionKey !== 'dashboard' && nextSectionKey === 'dashboard'
+}
+
 export function shouldRevealDashboardPanelAfterRender({
   catalogLoading,
   viewReady,
@@ -450,6 +460,10 @@ export function renderDashboardSection(): void {
 
 export function isDashboardViewReady(): boolean {
   return !availabilityState.catalogLoading && dashboardViewReady
+}
+
+export function prepareDashboardSectionEntry(): void {
+  resetDashboardPanelReveal()
 }
 
 export function handleDashboardInput(event: Event): void {

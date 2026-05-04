@@ -244,6 +244,7 @@ import {
   handleDashboardTagPointerOut,
   handleDashboardTagPointerOver,
   isDashboardViewReady,
+  prepareDashboardSectionEntry,
   getSingleDashboardMoveBookmark,
   moveSingleDashboardBookmark,
   moveSelectedDashboardBookmarks,
@@ -257,6 +258,7 @@ const IS_OPTIONS_DASHBOARD_EMBED_MODE =
 applyOptionsDashboardEmbedClasses()
 
 let newTabDashboardReadyPosted = false
+let activeSectionKey = ''
 let availabilityRenderFrame = 0
 let availabilityDurationTimer = 0
 let aiNamingDurationTimer = 0
@@ -458,6 +460,7 @@ async function saveAiNamingSettings(settings = aiNamingManagerState.settings) {
 function syncPageSection() {
   const rawKey = getCurrentSectionKey()
   const key = normalizeSectionKey(rawKey)
+  const previousSectionKey = activeSectionKey
   const section = SECTION_META[key]
   const links = document.querySelectorAll('[data-section-link]')
   const panels = document.querySelectorAll<HTMLElement>('[data-section-panel]')
@@ -465,6 +468,11 @@ function syncPageSection() {
   if (rawKey !== key) {
     window.history.replaceState(null, '', `#${key}`)
   }
+
+  if (previousSectionKey !== 'dashboard' && key === 'dashboard') {
+    prepareDashboardSectionEntry()
+  }
+  activeSectionKey = key
 
   document.body.classList.toggle('dashboard-fullscreen-active', key === 'dashboard')
 

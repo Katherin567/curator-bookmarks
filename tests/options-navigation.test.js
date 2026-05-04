@@ -56,6 +56,8 @@ test('options dashboard entry keeps the settings-page dashboard instead of redir
   assert.match(dashboardPanel, /data-dashboard-action="exit-dashboard"/)
   assert.match(optionsSource, /document\.body\.classList\.toggle\('dashboard-fullscreen-active', key === 'dashboard'\)/)
   assert.match(optionsSource, /options-dashboard-embed/)
+  assert.match(optionsSource, /let activeSectionKey = ''/)
+  assert.match(optionsSource, /previousSectionKey !== 'dashboard' && key === 'dashboard'[\s\S]*?prepareDashboardSectionEntry\(\)/)
   assert.match(optionsSource, /curator:newtab-dashboard-close/)
   assert.match(optionsSource, /curator:newtab-dashboard-ready/)
   assert.match(optionsSource, /notifyNewTabDashboardReady/)

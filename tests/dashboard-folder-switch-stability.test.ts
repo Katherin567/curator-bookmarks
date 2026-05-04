@@ -5,9 +5,34 @@ import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import {
   shouldRevealDashboardPanelAfterRender,
+  shouldResetDashboardPanelRevealForSectionEntry,
   shouldResetDashboardPanelRevealForRender,
   shouldResetDashboardVirtualScrollForFilterChange
 } from '../src/options/sections/dashboard.js'
+
+test('dashboard section entry resets reveal before showing cached cards', () => {
+  assert.equal(
+    shouldResetDashboardPanelRevealForSectionEntry({
+      previousSectionKey: 'general',
+      nextSectionKey: 'dashboard'
+    }),
+    true
+  )
+  assert.equal(
+    shouldResetDashboardPanelRevealForSectionEntry({
+      previousSectionKey: 'dashboard',
+      nextSectionKey: 'dashboard'
+    }),
+    false
+  )
+  assert.equal(
+    shouldResetDashboardPanelRevealForSectionEntry({
+      previousSectionKey: 'dashboard',
+      nextSectionKey: 'general'
+    }),
+    false
+  )
+})
 
 test('dashboard folder switches do not reset the ready panel reveal', () => {
   assert.equal(
