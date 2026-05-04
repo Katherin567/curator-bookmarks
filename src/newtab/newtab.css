@@ -3570,6 +3570,36 @@ body.settings-trigger-auto-hide .settings-trigger[aria-expanded="true"] {
 }
 
 @media (max-width: 680px) {
+  .settings-trigger-zone {
+    width: 112px;
+    height: 74px;
+  }
+
+  .settings-trigger {
+    top: 14px;
+    right: 14px;
+    width: 40px;
+    min-width: 40px;
+    padding: 0;
+  }
+
+  .dashboard-trigger {
+    right: 62px;
+    width: 40px;
+    min-width: 40px;
+    padding: 0;
+  }
+
+  .dashboard-trigger span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    clip-path: inset(50%);
+  }
+
   .newtab-shell {
     padding: 24px 18px 32px;
   }

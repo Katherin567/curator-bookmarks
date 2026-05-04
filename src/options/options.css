@@ -3,6 +3,7 @@
   --options-sidebar-width: 244px;
   --options-brand-height: 82px;
   --options-main-gutter: clamp(28px, 5vw, 88px);
+  --options-sidebar-gap: 32px;
   --options-content-max-width: 1120px;
   --bg: #000000;
   --surface-0: #111113;
@@ -521,13 +522,14 @@ a {
 
 .options-sidebar {
   position: sticky;
-  top: calc(var(--options-brand-height) + 24px);
+  top: calc(var(--options-brand-height) + var(--options-sidebar-gap));
   z-index: 9;
   width: 100%;
   max-width: var(--options-sidebar-width);
-  max-height: calc(100vh - var(--options-brand-height) - 48px);
+  max-height: calc(100vh - var(--options-brand-height) - var(--options-sidebar-gap) - 24px);
   align-self: start;
   overflow: auto;
+  margin-top: var(--options-sidebar-gap);
   padding: 20px 16px;
   border-radius: var(--radius-lg);
   border: 1px solid var(--line-soft);
@@ -4836,6 +4838,7 @@ body.dashboard-fullscreen-active {
     width: 100%;
     max-width: none;
     align-self: stretch;
+    margin-top: 0;
     padding: 14px;
   }
 
@@ -4849,7 +4852,7 @@ body.dashboard-fullscreen-active {
 
   .options-nav {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
     gap: 8px;
   }
 
@@ -5896,6 +5899,7 @@ body.dashboard-fullscreen-active {
     width: 100%;
     max-width: none;
     align-self: stretch;
+    margin-top: 0;
     padding: 0;
     border-right: 0;
     max-height: none;
@@ -5903,7 +5907,7 @@ body.dashboard-fullscreen-active {
   }
 
   .options-nav {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
     gap: 6px;
   }
 
@@ -5912,6 +5916,19 @@ body.dashboard-fullscreen-active {
     transform: none;
     border: 1px solid rgba(255, 255, 255, 0.08);
     background: #101011;
+  }
+
+  .options-nav-group-trigger,
+  .options-nav-subitem,
+  .options-dashboard-entry {
+    width: 100%;
+    writing-mode: horizontal-tb;
+  }
+
+  .options-nav-sublist {
+    margin-left: 0;
+    padding-left: 0;
+    border-left: 0;
   }
 
   .options-nav-link:hover,

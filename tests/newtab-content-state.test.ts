@@ -657,6 +657,16 @@ test('newtab dashboard glass layer only styles the iframe shell', () => {
   assert.doesNotMatch(optionsCss, /newtab-dashboard-(?:overlay|surface|frame)/)
 })
 
+test('newtab compact viewport keeps dashboard trigger from overlapping the clock', () => {
+  const newtabCss = readProjectFile('src/newtab/newtab.css')
+  const compactRule = newtabCss.match(/@media \(max-width:\s*680px\)\s*\{[\s\S]*?\.newtab-shell\s*\{/)?.[0] || ''
+
+  assert.match(compactRule, /\.settings-trigger-zone\s*\{[\s\S]*?width:\s*112px[\s\S]*?height:\s*74px/)
+  assert.match(compactRule, /\.settings-trigger\s*\{[\s\S]*?width:\s*40px[\s\S]*?min-width:\s*40px[\s\S]*?padding:\s*0/)
+  assert.match(compactRule, /\.dashboard-trigger\s*\{[\s\S]*?right:\s*62px[\s\S]*?width:\s*40px[\s\S]*?min-width:\s*40px[\s\S]*?padding:\s*0/)
+  assert.match(compactRule, /\.dashboard-trigger span\s*\{[\s\S]*?position:\s*absolute[\s\S]*?clip-path:\s*inset\(50%\)/)
+})
+
 test('newtab bookmark tiles match the frosted overview card surface', () => {
   const newtabCss = readProjectFile('src/newtab/newtab.css')
   const tileRule = getCssRuleBody(newtabCss, '.bookmark-tile')

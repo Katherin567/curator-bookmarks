@@ -74,6 +74,7 @@ test('options shell keeps brand and sidebar fixed while the main settings area s
   assert.match(optionsCss, /--options-sidebar-width:\s*244px/)
   assert.match(optionsCss, /--options-brand-height:\s*82px/)
   assert.match(optionsCss, /--options-main-gutter:\s*clamp\(28px,\s*5vw,\s*88px\)/)
+  assert.match(optionsCss, /--options-sidebar-gap:\s*32px/)
   assert.match(shellRule, /display:\s*grid/)
   assert.match(shellRule, /grid-template-columns:\s*var\(--options-sidebar-width\)\s+minmax\(0,\s*1fr\)/)
   assert.match(shellRule, /justify-content:\s*stretch/)
@@ -83,7 +84,7 @@ test('options shell keeps brand and sidebar fixed while the main settings area s
   assert.doesNotMatch(shellRule, /justify-content:\s*center/)
   assert.match(optionsCss, /\.options-header\s*\{[\s\S]*?position:\s*sticky[\s\S]*?top:\s*24px[\s\S]*?width:\s*100%[\s\S]*?padding:\s*18px\s+16px\s+0/)
   assert.match(optionsCss, /\.options-layout\s*\{[\s\S]*?grid-template-columns:\s*var\(--options-sidebar-width\)\s+minmax\(0,\s*1fr\)[\s\S]*?gap:\s*0[\s\S]*?height:\s*100%[\s\S]*?pointer-events:\s*none/)
-  assert.match(optionsCss, /\.options-sidebar\s*\{[\s\S]*?position:\s*sticky[\s\S]*?top:\s*calc\(var\(--options-brand-height\) \+ 24px\)[\s\S]*?max-height:\s*calc\(100vh - var\(--options-brand-height\) - 48px\)[\s\S]*?pointer-events:\s*auto/)
+  assert.match(optionsCss, /\.options-sidebar\s*\{[\s\S]*?position:\s*sticky[\s\S]*?top:\s*calc\(var\(--options-brand-height\) \+ var\(--options-sidebar-gap\)\)[\s\S]*?max-height:\s*calc\(100vh - var\(--options-brand-height\) - var\(--options-sidebar-gap\) - 24px\)[\s\S]*?margin-top:\s*var\(--options-sidebar-gap\)[\s\S]*?pointer-events:\s*auto/)
   assert.match(optionsCss, /\.options-main\s*\{[\s\S]*?height:\s*100%[\s\S]*?overflow:\s*auto[\s\S]*?padding:\s*24px\s+var\(--options-main-gutter\)\s+56px[\s\S]*?pointer-events:\s*auto[\s\S]*?scrollbar-gutter:\s*stable/)
   assert.match(optionsCss, /\.options-main\s*>\s*\.options-panel\s*\{[\s\S]*?width:\s*min\(100%,\s*var\(--options-content-max-width\)\)[\s\S]*?margin-inline:\s*auto/)
   assert.match(optionsCss, /--options-content-max-width:\s*1120px/)
@@ -94,6 +95,9 @@ test('options shell falls back to document scrolling on narrow screens', () => {
 
   assert.match(optionsCss, /@media \(max-width:\s*920px\)\s*\{[\s\S]*?html\s*\{[\s\S]*?overflow-y:\s*scroll[\s\S]*?body\s*\{[\s\S]*?overflow:\s*visible/)
   assert.match(optionsCss, /@media \(max-width:\s*920px\)\s*\{[\s\S]*?\.options-shell\s*\{[\s\S]*?display:\s*block[\s\S]*?height:\s*auto[\s\S]*?overflow:\s*visible/)
+  assert.match(optionsCss, /@media \(max-width:\s*920px\)\s*\{[\s\S]*?\.options-sidebar\s*\{[\s\S]*?margin-top:\s*0/)
+  assert.match(optionsCss, /@media \(max-width:\s*920px\)\s*\{[\s\S]*?\.options-nav\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)/)
+  assert.match(optionsCss, /@media \(max-width:\s*920px\)\s*\{[\s\S]*?\.options-nav-group-trigger,[\s\S]*?\.options-nav-subitem,[\s\S]*?\.options-dashboard-entry\s*\{[\s\S]*?writing-mode:\s*horizontal-tb/)
   assert.match(optionsCss, /@media \(max-width:\s*920px\)\s*\{[\s\S]*?\.options-main\s*\{[\s\S]*?height:\s*auto[\s\S]*?overflow:\s*visible/)
 })
 
