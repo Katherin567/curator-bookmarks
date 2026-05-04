@@ -22,6 +22,7 @@ export interface DashboardFilters {
 }
 
 export interface DashboardItem extends BookmarkRecord {
+  normalizedAncestorIds: string[]
   folderTitle: string
   topFolderId: string
   topFolderTitle: string
@@ -79,6 +80,7 @@ export function buildDashboardModel({
       ? buildContentSnapshotSearchMap(contentSnapshotIndex, { includeFullText })
       : new Map<string, string>())
   const items = bookmarks.map((bookmark) => {
+    const normalizedAncestorIds = normalizeDashboardIdList(bookmark.ancestorIds)
     const tagRecord = tagRecords[String(bookmark.id)] || null
     const folder = folderMap.get(String(bookmark.parentId || '')) || null
     const topFolder = getDashboardTopFolder(bookmark, folderMap)
@@ -109,6 +111,7 @@ export function buildDashboardModel({
 
     return {
       ...bookmark,
+      normalizedAncestorIds,
       domain,
       folderTitle: folder?.title || bookmark.path || '未归档路径',
       topFolderId: topFolder?.id || '',
@@ -164,7 +167,7 @@ export function filterDashboardItems(items: DashboardItem[], filters: DashboardF
     if (
       folderId &&
       String(item.parentId || '') !== folderId &&
-      !(Array.isArray(item.ancestorIds) && item.ancestorIds.map(String).includes(folderId))
+      !item.normalizedAncestorIds.includes(folderId)
     ) {
       return false
     }
@@ -256,6 +259,12 @@ export function getDashboardDateMeta(value: unknown): { key: string; label: stri
 export function normalizeDashboardTextList(value: unknown): string[] {
   return Array.isArray(value)
     ? value.map((item) => String(item || '').trim()).filter(Boolean)
+    : []
+}
+
+function normalizeDashboardIdList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? [...new Set(value.map((item) => String(item || '').trim()).filter(Boolean))]
     : []
 }
 

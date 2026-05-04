@@ -407,6 +407,39 @@ test('uses recent sort hints to boost newer matching bookmarks', () => {
   assert.ok(results[0]?.matchReasons.some((reason) => reason.includes('最近添加优先')))
 })
 
+test('filters popup results by flexible structured date ranges', () => {
+  const now = new Date(2026, 4, 4, 15).getTime()
+  const recent = indexBookmarkForSearch(bookmark({
+    id: 'recent-react',
+    title: 'React Table Guide',
+    normalizedTitle: 'react table guide',
+    normalizedUrl: 'github.com/react/table',
+    domain: 'github.com',
+    path: 'Frontend',
+    dateAdded: new Date(2026, 4, 1).getTime()
+  }))
+  const old = indexBookmarkForSearch(bookmark({
+    id: 'old-react',
+    title: 'React Table Guide',
+    normalizedTitle: 'react table guide',
+    normalizedUrl: 'github.com/react/archive',
+    domain: 'github.com',
+    path: 'Frontend',
+    dateAdded: new Date(2026, 3, 1).getTime()
+  }))
+
+  const originalNow = Date.now
+  Date.now = () => now
+  try {
+    const results = searchBookmarks('React 最近 2 周 site:github.com', [old, recent])
+    assert.deepEqual(results.map((result) => result.id), ['recent-react'])
+    assert.ok(results[0]?.matchReasons.some((reason) => reason.includes('最近 2 周')))
+    assert.ok(results[0]?.matchReasons.some((reason) => reason.includes('站点 github.com')))
+  } finally {
+    Date.now = originalNow
+  }
+})
+
 test('cooperative search can be cancelled by caller state', async () => {
   const bookmarks = Array.from({ length: 1301 }, (_value, index) => {
     return indexBookmarkForSearch(bookmark({

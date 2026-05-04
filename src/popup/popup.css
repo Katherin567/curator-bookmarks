@@ -775,6 +775,41 @@ button:focus-visible {
   font-weight: 650;
 }
 
+.search-filter-chip.site,
+.dashboard-search-chip.site {
+  border-color: rgba(125, 211, 252, 0.34);
+  background: rgba(125, 211, 252, 0.1);
+  color: #bae6fd;
+}
+
+.search-filter-chip.folder,
+.dashboard-search-chip.folder {
+  border-color: rgba(167, 139, 250, 0.34);
+  background: rgba(167, 139, 250, 0.1);
+  color: #ddd6fe;
+}
+
+.search-filter-chip.type,
+.dashboard-search-chip.type {
+  border-color: rgba(134, 239, 172, 0.34);
+  background: rgba(134, 239, 172, 0.1);
+  color: #bbf7d0;
+}
+
+.search-filter-chip.time,
+.dashboard-search-chip.time {
+  border-color: rgba(251, 191, 36, 0.34);
+  background: rgba(251, 191, 36, 0.11);
+  color: #fde68a;
+}
+
+.search-filter-chip.exclude,
+.dashboard-search-chip.exclude {
+  border-color: rgba(248, 113, 113, 0.34);
+  background: rgba(248, 113, 113, 0.1);
+  color: #fecaca;
+}
+
 .clear-search:hover,
 .clear-search:focus-visible {
   border-color: rgba(245, 245, 247, 0.58);

@@ -126,6 +126,7 @@ test('dashboard search help documents quoted filters and spaced operators', () =
 
   assert.match(optionsHtml, /site:github\.com 或 site: github\.com/)
   assert.match(optionsHtml, /folder:&quot;前端 资料&quot;/)
+  assert.match(optionsHtml, /最近 2 周、昨天、上个月/)
   assert.match(optionsHtml, /-"短视频"/)
 })
 

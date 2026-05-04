@@ -1761,7 +1761,7 @@ function renderEmptySearchState() {
     : (hasFolderFilter ? '当前文件夹未找到相关书签' : '未找到相关书签')
   const hint = naturalSearchActive
     ? '可以清除筛选、查看全部，或关闭自然语言搜索改用关键词语法。'
-    : '可以清除筛选、查看全部，或试试 site:、folder:、type: 等高级语法。'
+    : '可以清除筛选、查看全部，或试试 site:github.com、folder:"前端 资料"、最近 2 周、-视频 等高级语法。'
   const actions = [
     '<button class="empty-action primary" type="button" data-empty-action="clear-query">清空搜索</button>',
     hasFolderFilter

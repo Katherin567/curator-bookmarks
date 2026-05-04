@@ -143,6 +143,7 @@ test('builds dashboard items with folder, date, tag, snapshot and summary metada
   assert.equal(first.tagSummary, 'React / Data Grid')
   assert.equal(first.summary, 'advanced table filtering')
   assert.equal(first.searchText.includes('column pinning'), true)
+  assert.deepEqual(first.normalizedAncestorIds, ['1', '10'])
   assert.equal(model.items[1].folderTitle, '书签栏 / 工具')
   assert.equal(model.items[1].monthKey, 'unknown')
 })
@@ -218,6 +219,16 @@ test('filters dashboard items by query, folder ancestor, domain and month', () =
   assert.deepEqual(filterDashboardItems(model.items, { domain: 'vue.example.com' }).map((item) => item.id), ['b2'])
   assert.deepEqual(filterDashboardItems(model.items, { month: '2026-02' }).map((item) => item.id), ['b1'])
   assert.deepEqual(filterDashboardItems(model.items, { query: 'site:docs.example.com -vue' }).map((item) => item.id), ['b1'])
+  const originalNow = Date.now
+  Date.now = () => Date.UTC(2026, 2, 10)
+  try {
+    assert.deepEqual(
+      filterDashboardItems(model.items, { query: '最近 2 周' }).map((item) => item.id),
+      ['b2']
+    )
+  } finally {
+    Date.now = originalNow
+  }
   assert.deepEqual(
     filterDashboardItems(model.items, {
       query: 'site: docs.example.com folder: "开发 / React" "react table"'

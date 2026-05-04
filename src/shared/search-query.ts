@@ -5,6 +5,9 @@ import { normalizeText, stripCommonUrlPrefix } from './text.js'
 export type SearchChipKind = 'site' | 'folder' | 'type' | 'time' | 'exclude'
 export type SavedSearchScope = 'popup' | 'dashboard' | 'both'
 
+type RelativeTimeUnit = 'day' | 'week' | 'month'
+type FixedTimeUnit = 'current-month' | 'current-week' | 'last-month' | 'last-week' | 'half-year' | 'today' | 'yesterday' | 'before-yesterday'
+
 export interface SearchDateRange {
   from: number
   to: number
@@ -43,16 +46,17 @@ const EMPTY_INDEX: SavedSearchIndex = {
   searches: []
 }
 
-const TIME_PATTERNS = [
-  { pattern: /^(最近|近)(一|1)个月$/, amount: 1, unit: 'month', label: '最近一个月' },
-  { pattern: /^(最近|近)(三|3)个月$/, amount: 3, unit: 'month', label: '最近三个月' },
-  { pattern: /^(最近|近)(一|1)周$/, amount: 7, unit: 'day', label: '最近一周' },
-  { pattern: /^(最近|近)(七|7)天$/, amount: 7, unit: 'day', label: '最近七天' },
-  { pattern: /^(最近|近)(三十|30)天$/, amount: 30, unit: 'day', label: '最近三十天' },
-  { pattern: /^(本月|这个月)$/, amount: 0, unit: 'current-month', label: '本月' },
-  { pattern: /^(本周|这周|这个星期)$/, amount: 0, unit: 'current-week', label: '本周' },
-  { pattern: /^(今天)$/, amount: 0, unit: 'today', label: '今天' }
-] as const
+const RELATIVE_TIME_PATTERN = /^(?:最近|近|过去)(\d+|一|两|二|三|四|五|六|七|八|九|十)(天|日|周|星期|礼拜|个月|月)$/
+const FIXED_TIME_PATTERNS: Array<{ pattern: RegExp; unit: FixedTimeUnit; label: string }> = [
+  { pattern: /^(今天|今日)$/, unit: 'today', label: '今天' },
+  { pattern: /^(昨天|昨日)$/, unit: 'yesterday', label: '昨天' },
+  { pattern: /^(前天)$/, unit: 'before-yesterday', label: '前天' },
+  { pattern: /^(本周|这周|这个星期)$/, unit: 'current-week', label: '本周' },
+  { pattern: /^(上周|上一周|上星期|上个星期)$/, unit: 'last-week', label: '上周' },
+  { pattern: /^(本月|这个月)$/, unit: 'current-month', label: '本月' },
+  { pattern: /^(上月|上个月)$/, unit: 'last-month', label: '上个月' },
+  { pattern: /^(最近半年|近半年|过去半年)$/, unit: 'half-year', label: '最近 6 个月' }
+]
 
 const SEARCH_OPERATOR_KEYS = new Set([
   'site',
@@ -307,15 +311,21 @@ function parseSearchOperatorTokens(
 }
 
 function parseTimeExpression(tokens: string[], index: number, now: number): { range: SearchDateRange; consumed: number } | null {
-  const single = parseTimeToken(tokens[index], now)
-  if (single) {
-    return { range: single, consumed: 1 }
-  }
+  const candidates = [
+    index + 2 < tokens.length
+      ? { value: `${tokens[index] || ''}${tokens[index + 1] || ''}${tokens[index + 2] || ''}`, consumed: 3 }
+      : null,
+    index + 1 < tokens.length
+      ? { value: `${tokens[index] || ''}${tokens[index + 1] || ''}`, consumed: 2 }
+      : null,
+    { value: tokens[index], consumed: 1 }
+  ].filter(Boolean) as Array<{ value: string; consumed: number }>
 
-  const merged = `${tokens[index] || ''}${tokens[index + 1] || ''}`
-  const mergedRange = parseTimeToken(merged, now)
-  if (mergedRange) {
-    return { range: mergedRange, consumed: 2 }
+  for (const candidate of candidates) {
+    const range = parseTimeToken(candidate.value, now)
+    if (range) {
+      return { range, consumed: candidate.consumed }
+    }
   }
 
   return null
@@ -323,34 +333,132 @@ function parseTimeExpression(tokens: string[], index: number, now: number): { ra
 
 function parseTimeToken(token: string, now: number): SearchDateRange | null {
   const value = normalizeSearchValue(token)
-  for (const item of TIME_PATTERNS) {
+  const relative = parseRelativeTimeToken(value)
+  if (relative) {
+    return buildRelativeDateRange(relative.amount, relative.unit, relative.label, now)
+  }
+
+  for (const item of FIXED_TIME_PATTERNS) {
     if (item.pattern.test(value)) {
-      return buildDateRange(item.amount, item.unit, item.label, now)
+      return buildFixedDateRange(item.unit, item.label, now)
     }
   }
   return null
 }
 
-function buildDateRange(amount: number, unit: string, label: string, now: number): SearchDateRange {
+function parseRelativeTimeToken(value: string): { amount: number; unit: RelativeTimeUnit; label: string } | null {
+  const match = value.match(RELATIVE_TIME_PATTERN)
+  if (!match) {
+    return null
+  }
+
+  const amount = parseTimeAmount(match[1])
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return null
+  }
+
+  const unit = normalizeTimeUnit(match[2])
+  const label = `最近 ${amount} ${getTimeUnitLabel(unit)}`
+  return { amount, unit, label }
+}
+
+function buildRelativeDateRange(amount: number, unit: RelativeTimeUnit, label: string, now: number): SearchDateRange {
   const end = endOfDay(now)
+  if (unit === 'week') {
+    return { from: startOfDay(now - (amount * 7 - 1) * 24 * 60 * 60 * 1000), to: end, label }
+  }
   if (unit === 'month') {
     const date = new Date(now)
     date.setMonth(date.getMonth() - amount)
     return { from: startOfDay(date.getTime()), to: end, label }
   }
-  if (unit === 'day') {
-    return { from: startOfDay(now - amount * 24 * 60 * 60 * 1000), to: end, label }
-  }
+  return { from: startOfDay(now - (amount - 1) * 24 * 60 * 60 * 1000), to: end, label }
+}
+
+function buildFixedDateRange(unit: FixedTimeUnit, label: string, now: number): SearchDateRange {
+  const end = endOfDay(now)
   if (unit === 'current-month') {
     const date = new Date(now)
     return { from: new Date(date.getFullYear(), date.getMonth(), 1).getTime(), to: end, label }
+  }
+  if (unit === 'last-month') {
+    const date = new Date(now)
+    return {
+      from: new Date(date.getFullYear(), date.getMonth() - 1, 1).getTime(),
+      to: new Date(date.getFullYear(), date.getMonth(), 1).getTime() - 1,
+      label
+    }
+  }
+  if (unit === 'half-year') {
+    const date = new Date(now)
+    date.setMonth(date.getMonth() - 6)
+    return { from: startOfDay(date.getTime()), to: end, label }
   }
   if (unit === 'current-week') {
     const date = new Date(now)
     const day = date.getDay() || 7
     return { from: startOfDay(now - (day - 1) * 24 * 60 * 60 * 1000), to: end, label }
   }
+  if (unit === 'last-week') {
+    const date = new Date(now)
+    const day = date.getDay() || 7
+    const currentWeekStart = startOfDay(now - (day - 1) * 24 * 60 * 60 * 1000)
+    return {
+      from: currentWeekStart - 7 * 24 * 60 * 60 * 1000,
+      to: currentWeekStart - 1,
+      label
+    }
+  }
+  if (unit === 'yesterday') {
+    const todayStart = startOfDay(now)
+    return { from: todayStart - 24 * 60 * 60 * 1000, to: todayStart - 1, label }
+  }
+  if (unit === 'before-yesterday') {
+    const todayStart = startOfDay(now)
+    return { from: todayStart - 2 * 24 * 60 * 60 * 1000, to: todayStart - 24 * 60 * 60 * 1000 - 1, label }
+  }
   return { from: startOfDay(now), to: end, label }
+}
+
+function parseTimeAmount(value: string): number {
+  if (/^\d+$/.test(value)) {
+    return Number(value)
+  }
+
+  const digits: Record<string, number> = {
+    一: 1,
+    两: 2,
+    二: 2,
+    三: 3,
+    四: 4,
+    五: 5,
+    六: 6,
+    七: 7,
+    八: 8,
+    九: 9,
+    十: 10
+  }
+  return digits[value] || 0
+}
+
+function normalizeTimeUnit(value: string): RelativeTimeUnit {
+  if (value === '周' || value === '星期' || value === '礼拜') {
+    return 'week'
+  }
+  if (value === '个月' || value === '月') {
+    return 'month'
+  }
+  return 'day'
+}
+
+function getTimeUnitLabel(unit: RelativeTimeUnit): string {
+  if (unit === 'week') {
+    return '周'
+  }
+  if (unit === 'month') {
+    return '个月'
+  }
+  return '天'
 }
 
 function startOfDay(timestamp: number): number {
