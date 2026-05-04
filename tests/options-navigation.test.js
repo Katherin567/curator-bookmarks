@@ -7,6 +7,12 @@ function readProjectFile(path) {
   return readFileSync(resolve(process.cwd(), path), 'utf8')
 }
 
+function getCssRuleBody(css, selector) {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = css.match(new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`))
+  return match?.[1] || ''
+}
+
 test('recycle bin is the last item in bookmark management navigation', () => {
   const optionsHtml = readProjectFile('src/options/options.html')
   const start = optionsHtml.indexOf('id="options-bookmark-nav-label"')
@@ -63,15 +69,24 @@ test('options dashboard entry keeps the settings-page dashboard instead of redir
 
 test('options shell keeps brand and sidebar fixed while the main settings area scrolls', () => {
   const optionsCss = readProjectFile('src/options/options.css')
+  const shellRule = getCssRuleBody(optionsCss, '.options-shell')
 
   assert.match(optionsCss, /--options-sidebar-width:\s*244px/)
   assert.match(optionsCss, /--options-brand-height:\s*82px/)
-  assert.match(optionsCss, /\.options-shell\s*\{[\s\S]*?display:\s*grid[\s\S]*?grid-template-columns:\s*var\(--options-sidebar-width\)\s+var\(--options-shell-content-width\)[\s\S]*?height:\s*100vh[\s\S]*?overflow:\s*hidden/)
-  assert.match(optionsCss, /\.options-header\s*\{[\s\S]*?position:\s*sticky[\s\S]*?top:\s*24px/)
-  assert.match(optionsCss, /\.options-layout\s*\{[\s\S]*?grid-template-columns:\s*var\(--options-sidebar-width\)\s+minmax\(0,\s*1fr\)[\s\S]*?height:\s*100%[\s\S]*?pointer-events:\s*none/)
+  assert.match(optionsCss, /--options-main-gutter:\s*clamp\(28px,\s*5vw,\s*88px\)/)
+  assert.match(shellRule, /display:\s*grid/)
+  assert.match(shellRule, /grid-template-columns:\s*var\(--options-sidebar-width\)\s+minmax\(0,\s*1fr\)/)
+  assert.match(shellRule, /justify-content:\s*stretch/)
+  assert.match(shellRule, /height:\s*100vh/)
+  assert.match(shellRule, /padding:\s*0/)
+  assert.match(shellRule, /overflow:\s*hidden/)
+  assert.doesNotMatch(shellRule, /justify-content:\s*center/)
+  assert.match(optionsCss, /\.options-header\s*\{[\s\S]*?position:\s*sticky[\s\S]*?top:\s*24px[\s\S]*?width:\s*100%[\s\S]*?padding:\s*18px\s+16px\s+0/)
+  assert.match(optionsCss, /\.options-layout\s*\{[\s\S]*?grid-template-columns:\s*var\(--options-sidebar-width\)\s+minmax\(0,\s*1fr\)[\s\S]*?gap:\s*0[\s\S]*?height:\s*100%[\s\S]*?pointer-events:\s*none/)
   assert.match(optionsCss, /\.options-sidebar\s*\{[\s\S]*?position:\s*sticky[\s\S]*?top:\s*calc\(var\(--options-brand-height\) \+ 24px\)[\s\S]*?max-height:\s*calc\(100vh - var\(--options-brand-height\) - 48px\)[\s\S]*?pointer-events:\s*auto/)
-  assert.match(optionsCss, /\.options-main\s*\{[\s\S]*?height:\s*100%[\s\S]*?overflow:\s*auto[\s\S]*?pointer-events:\s*auto[\s\S]*?scrollbar-gutter:\s*stable/)
-  assert.match(optionsCss, /--options-shell-content-width:\s*minmax\(0,\s*1120px\)/)
+  assert.match(optionsCss, /\.options-main\s*\{[\s\S]*?height:\s*100%[\s\S]*?overflow:\s*auto[\s\S]*?padding:\s*24px\s+var\(--options-main-gutter\)\s+56px[\s\S]*?pointer-events:\s*auto[\s\S]*?scrollbar-gutter:\s*stable/)
+  assert.match(optionsCss, /\.options-main\s*>\s*\.options-panel\s*\{[\s\S]*?width:\s*min\(100%,\s*var\(--options-content-max-width\)\)[\s\S]*?margin-inline:\s*auto/)
+  assert.match(optionsCss, /--options-content-max-width:\s*1120px/)
 })
 
 test('options shell falls back to document scrolling on narrow screens', () => {
