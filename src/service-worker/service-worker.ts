@@ -58,6 +58,10 @@ import {
   buildPageContextForAi,
   buildRemotePageContentFromText,
   combinePageContentContexts,
+  decideDirectPageFetch,
+  appendPageContentWarnings,
+  getDirectPageFetchFailureWarning,
+  getDirectPageFetchOriginPattern,
   normalizePageContentContext,
   type PageContentContext
 } from '../options/sections/content-extraction.js'
@@ -1459,36 +1463,51 @@ async function buildAutoPageContext(
 ): Promise<PageContentContext> {
   const timeoutMs = settings.timeoutMs
   let context: PageContentContext
+  const originPattern = getDirectPageFetchOriginPattern(bookmark.url)
+  const canFetchDirectly = originPattern ? await containsHostPermission(originPattern) : false
+  const directFetchDecision = decideDirectPageFetch(bookmark.url, canFetchDirectly)
 
-  try {
-    const response = await fetchWithAutoTimeout(bookmark.url, {
-      method: 'GET',
-      cache: 'no-store',
-      credentials: 'omit',
-      redirect: 'follow',
-      referrerPolicy: 'no-referrer'
-    }, timeoutMs)
-    const finalUrl = String(response.url || bookmark.url || '')
-    const contentType = String(response.headers.get('content-type') || '').toLowerCase()
+  if (!directFetchDecision.allowed) {
+    context = appendPageContentWarnings(
+      buildFallbackPageContentFromUrl(bookmark.url, {
+        currentTitle: bookmark.title
+      }),
+      [directFetchDecision.warning]
+    )
+  } else {
+    try {
+      const response = await fetchWithAutoTimeout(bookmark.url, {
+        method: 'GET',
+        cache: 'no-store',
+        credentials: 'omit',
+        redirect: 'follow',
+        referrerPolicy: 'no-referrer'
+      }, timeoutMs)
+      const finalUrl = String(response.url || bookmark.url || '')
+      const contentType = String(response.headers.get('content-type') || '').toLowerCase()
 
-    if (contentType.includes('text/html')) {
-      const html = await response.text()
-      context = buildAutoPageContentFromHtml(html, {
-        url: finalUrl,
-        currentTitle: bookmark.title,
-        contentType
-      })
-    } else {
-      context = buildFallbackPageContentFromUrl(finalUrl, {
-        currentTitle: bookmark.title,
-        contentType
-      })
+      if (contentType.includes('text/html')) {
+        const html = await response.text()
+        context = buildAutoPageContentFromHtml(html, {
+          url: finalUrl,
+          currentTitle: bookmark.title,
+          contentType
+        })
+      } else {
+        context = buildFallbackPageContentFromUrl(finalUrl, {
+          currentTitle: bookmark.title,
+          contentType
+        })
+      }
+    } catch (error) {
+      context = appendPageContentWarnings(
+        buildFallbackPageContentFromUrl(bookmark.url, {
+          currentTitle: bookmark.title,
+          error
+        }),
+        [getDirectPageFetchFailureWarning(error)]
+      )
     }
-  } catch (error) {
-    context = buildFallbackPageContentFromUrl(bookmark.url, {
-      currentTitle: bookmark.title,
-      error
-    })
   }
 
   if (!settings.allowRemoteParsing) {
@@ -1518,7 +1537,6 @@ async function buildAutoPageContext(
     })
   }
 }
-
 function buildAutoPageContentFromHtml(
   html: string,
   { url = '', currentTitle = '', contentType = '' } = {}
