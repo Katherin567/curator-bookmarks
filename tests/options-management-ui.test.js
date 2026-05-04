@@ -121,6 +121,14 @@ test('dashboard search toolbar omits duplicate result count and placeholder copy
   assert.doesNotMatch(dashboardSource, /dashboardResultCount/)
 })
 
+test('dashboard search help documents quoted filters and spaced operators', () => {
+  const optionsHtml = readProjectFile('src/options/options.html')
+
+  assert.match(optionsHtml, /site:github\.com 或 site: github\.com/)
+  assert.match(optionsHtml, /folder:&quot;前端 资料&quot;/)
+  assert.match(optionsHtml, /-"短视频"/)
+})
+
 test('dashboard search input reuses the animated bottom focus indicator', () => {
   const optionsHtml = readProjectFile('src/options/options.html')
   const optionsCss = readProjectFile('src/options/options.css')

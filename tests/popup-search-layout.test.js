@@ -18,6 +18,14 @@ test('popup search block does not render saved search controls', () => {
   assert.doesNotMatch(popupSource, /hydrateSavedSearches|applySelectedSavedSearch|saveCurrentSearch|deleteCurrentSavedSearch/)
 })
 
+test('popup search help documents quoted filters and spaced operators', () => {
+  const popupHtml = readProjectFile('src/popup/popup.html')
+
+  assert.match(popupHtml, /site:github\.com 或 site: github\.com/)
+  assert.match(popupHtml, /folder:&quot;前端 资料&quot;/)
+  assert.match(popupHtml, /-&quot;短视频&quot;/)
+})
+
 test('popup auto analyze status renders at the bottom of the main layout', () => {
   const popupHtml = readProjectFile('src/popup/popup.html')
   const contentIndex = popupHtml.indexOf('<section class="content-shell">')
