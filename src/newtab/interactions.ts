@@ -112,6 +112,52 @@ export function buildBookmarkOrderAfterInsert(
   return nextIds
 }
 
+export function applyBookmarkMoveOperationsToChildren(
+  children: chrome.bookmarks.BookmarkTreeNode[] | undefined,
+  operations: BookmarkMoveOperation[]
+): chrome.bookmarks.BookmarkTreeNode[] | null {
+  if (!children) {
+    return null
+  }
+
+  const nextChildren = [...children]
+  for (const operation of operations) {
+    const bookmarkId = String(operation.id || '').trim()
+    const parentId = String(operation.parentId || '').trim()
+    if (!bookmarkId || !parentId || !Number.isFinite(operation.index)) {
+      return null
+    }
+
+    const currentIndex = nextChildren.findIndex((child) => String(child.id) === bookmarkId)
+    if (currentIndex < 0) {
+      return null
+    }
+
+    const [movedNode] = nextChildren.splice(currentIndex, 1)
+    if (!movedNode.url || String(movedNode.parentId || '') !== parentId) {
+      return null
+    }
+
+    const rawTargetIndex = Math.trunc(operation.index)
+    const insertIndex = Math.max(
+      0,
+      Math.min(
+        currentIndex < rawTargetIndex ? rawTargetIndex - 1 : rawTargetIndex,
+        nextChildren.length
+      )
+    )
+    nextChildren.splice(insertIndex, 0, {
+      ...movedNode,
+      parentId
+    })
+  }
+
+  return nextChildren.map((child, index) => ({
+    ...child,
+    index
+  }))
+}
+
 export function shouldInsertAfterBookmarkTile(
   pointer: { x: number; y: number },
   targetRect: BookmarkTileRectLike

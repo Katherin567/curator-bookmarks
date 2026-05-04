@@ -67,6 +67,34 @@ body {
   padding: 0;
 }
 
+.app-shell {
+  line-break: strict;
+  hanging-punctuation: allow-end;
+  text-spacing-trim: trim-start;
+  text-autospace: normal;
+}
+
+.app-shell :where(
+  input,
+  textarea,
+  select,
+  button,
+  code,
+  kbd,
+  pre,
+  samp,
+  .modal-card-path,
+  .bookmark-url,
+  .result-url,
+  .smart-url,
+  .search-input
+) {
+  line-break: auto;
+  hanging-punctuation: none;
+  text-spacing-trim: space-all;
+  text-autospace: no-autospace;
+}
+
 body::before,
 body::after {
   content: "";

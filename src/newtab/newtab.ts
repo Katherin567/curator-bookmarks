@@ -15,6 +15,10 @@ import {
 import { deleteBookmarkToRecycle, removeRecycleEntry } from '../shared/recycle-bin.js'
 import { getLocalStorage, setLocalStorage } from '../shared/storage.js'
 import type { ExtractedBookmarkData, FolderRecord } from '../shared/types.js'
+import {
+  loadBookmarkTagIndex,
+  type BookmarkTagIndex
+} from '../shared/bookmark-tags.js'
 import { cancelExitMotion, closeWithExitMotion } from '../shared/motion.js'
 import {
   DEFAULT_ICON_SETTINGS,
@@ -78,10 +82,12 @@ import {
 import {
   BACKGROUND_URL_FETCH_TIMEOUT_MS,
   BACKGROUND_URL_MAX_BYTES,
+  applyBookmarkMoveOperationsToChildren,
   buildBookmarkOrderAfterInsert,
   buildMinimalBookmarkMoveOperations,
   resolveRestorableBookmarkParentId,
   resolveBookmarkDragInsertIndex,
+  type BookmarkMoveOperation,
   type BookmarkDragSlotRectLike,
   validateBackgroundBlobSize,
   validateBackgroundContentLength
@@ -109,6 +115,10 @@ import {
   normalizeTimeSettings,
   type NewTabTimeSettings
 } from './time-settings.js'
+import {
+  loadPopupSearchIndexSnapshotState,
+  type PopupSearchIndexSnapshotState
+} from '../popup/search-index.js'
 const FAVICON_SIZE = 64
 const FAVICON_COLOR_SAMPLE_SIZE = 32
 const CUSTOM_ICON_MAX_BYTES = 2 * 1024 * 1024
@@ -220,6 +230,8 @@ const state = {
   error: '',
   rootNode: null as chrome.bookmarks.BookmarkTreeNode | null,
   folderData: null as ExtractedBookmarkData | null,
+  bookmarkTagIndex: null as BookmarkTagIndex | null,
+  searchSnapshotState: null as PopupSearchIndexSnapshotState | null,
   folderNodeMap: new Map<string, chrome.bookmarks.BookmarkTreeNode>(),
   folderNode: null as chrome.bookmarks.BookmarkTreeNode | null,
   folderSections: [] as NewTabFolderSection[],
@@ -278,6 +290,9 @@ const state = {
   folderDragOriginalOrderIds: [] as string[],
   folderDragSuppressClick: false,
   reorderingBookmarks: false,
+  selfBookmarkMoveIds: new Set<string>(),
+  selfBookmarkMoveSuppressUntil: 0,
+  bookmarkReorderError: '',
   backgroundSettings: { ...DEFAULT_BACKGROUND_SETTINGS },
   searchSettings: { ...DEFAULT_SEARCH_SETTINGS },
   iconSettings: { ...DEFAULT_ICON_SETTINGS },
@@ -485,7 +500,7 @@ function bindEvents(): void {
   chrome.bookmarks?.onCreated?.addListener(handleBookmarksChanged)
   chrome.bookmarks?.onRemoved?.addListener(handleBookmarksChanged)
   chrome.bookmarks?.onChanged?.addListener(handleBookmarksChanged)
-  chrome.bookmarks?.onMoved?.addListener(handleBookmarksChanged)
+  chrome.bookmarks?.onMoved?.addListener(handleBookmarkMoved)
 
   window.clearTimeout(clockTimer)
   scheduleClockTick()
@@ -1780,17 +1795,69 @@ async function persistBookmarkOrder(
   }
 
   state.reorderingBookmarks = true
+  state.selfBookmarkMoveIds = new Set(operations.map((operation) => operation.id))
+  state.selfBookmarkMoveSuppressUntil = Date.now() + 1500
+  state.bookmarkReorderError = ''
+  syncBookmarkReorderBusyState()
   try {
     for (const operation of operations) {
       await moveBookmark(operation.id, operation.parentId, operation.index)
     }
-    await refreshNewTab()
+
+    if (!syncPersistedBookmarkOrderInState(folderId, operations, finalBookmarkIds)) {
+      await refreshNewTab()
+    }
   } catch (error) {
-    state.error = error instanceof Error ? error.message : '书签排序保存失败，请刷新后重试。'
+    const message = error instanceof Error ? error.message : '书签排序保存失败，请刷新后重试。'
     await refreshNewTab()
+    state.bookmarkReorderError = message
+    render()
+    updateClockText()
   } finally {
     state.reorderingBookmarks = false
+    syncBookmarkReorderBusyState()
   }
+}
+
+function syncPersistedBookmarkOrderInState(
+  folderId: string,
+  operations: BookmarkMoveOperation[],
+  finalBookmarkIds: string[]
+): boolean {
+  const folderNode = state.folderNodeMap.get(folderId) || null
+  const nextChildren = applyBookmarkMoveOperationsToChildren(folderNode?.children, operations)
+  if (!folderNode || !nextChildren) {
+    return false
+  }
+
+  const nextBookmarkIds = nextChildren
+    .filter((child) => Boolean(child.url))
+    .map((child) => String(child.id))
+  if (!areStringArraysEqual(nextBookmarkIds, finalBookmarkIds)) {
+    return false
+  }
+
+  folderNode.children = nextChildren
+  state.folderData = extractBookmarkData(state.rootNode)
+  state.folderNodeMap = buildFolderNodeMap(state.rootNode)
+  state.folderSections = buildNewTabFolderSections(
+    state.rootNode,
+    state.folderSettings,
+    state.folderData,
+    state.folderNodeMap
+  )
+  refreshDerivedBookmarkState()
+  render()
+  updateClockText()
+  return true
+}
+
+function syncBookmarkReorderBusyState(): void {
+  const busy = state.reorderingBookmarks ? 'true' : 'false'
+  document.querySelector<HTMLElement>('.newtab-content')?.setAttribute('aria-busy', busy)
+  document.querySelectorAll<HTMLElement>('.bookmark-grid').forEach((grid) => {
+    grid.setAttribute('aria-busy', busy)
+  })
 }
 
 function handleFolderPointerDown(event: PointerEvent): void {
@@ -2132,6 +2199,32 @@ function handleBookmarksChanged(): void {
   void refreshNewTab()
 }
 
+function handleBookmarkMoved(bookmarkId: string): void {
+  if (isSelfBookmarkMoveEvent(bookmarkId)) {
+    return
+  }
+
+  handleBookmarksChanged()
+}
+
+function isSelfBookmarkMoveEvent(bookmarkId: string): boolean {
+  const normalizedBookmarkId = String(bookmarkId || '').trim()
+  if (
+    normalizedBookmarkId &&
+    state.selfBookmarkMoveIds.has(normalizedBookmarkId) &&
+    Date.now() <= state.selfBookmarkMoveSuppressUntil
+  ) {
+    state.selfBookmarkMoveIds.delete(normalizedBookmarkId)
+    return true
+  }
+
+  if (Date.now() > state.selfBookmarkMoveSuppressUntil) {
+    state.selfBookmarkMoveIds.clear()
+  }
+
+  return state.reorderingBookmarks
+}
+
 function isActiveMenuBookmarkPinned(): boolean {
   const bookmark = getActiveMenuBookmark()
   return Boolean(bookmark && state.activity.pinnedIds.includes(String(bookmark.id)))
@@ -2437,10 +2530,11 @@ async function saveAddedBookmark(): Promise<void> {
 async function refreshNewTab(): Promise<void> {
   state.loading = true
   state.error = ''
+  state.bookmarkReorderError = ''
   render()
 
   try {
-    const [tree, stored] = await Promise.all([
+    const [tree, stored, tagIndex, snapshotState] = await Promise.all([
       getBookmarkTree(),
       getLocalStorage([
         STORAGE_KEYS.newTabCustomIcons,
@@ -2452,7 +2546,9 @@ async function refreshNewTab(): Promise<void> {
         STORAGE_KEYS.newTabFolderSettings,
         STORAGE_KEYS.newTabTimeSettings,
         STORAGE_KEYS.newTabActivity
-      ])
+      ]),
+      loadBookmarkTagIndex().catch(() => null),
+      loadPopupSearchIndexSnapshotState().catch(() => null)
     ])
     const rootNode = tree[0] || null
     const folderData = extractBookmarkData(rootNode)
@@ -2465,6 +2561,8 @@ async function refreshNewTab(): Promise<void> {
 
     state.rootNode = rootNode
     state.folderData = folderData
+    state.bookmarkTagIndex = tagIndex
+    state.searchSnapshotState = snapshotState
     state.folderNodeMap = folderNodeMap
     state.folderSettings = folderSettings
     state.folderSections = folderSections
@@ -3268,7 +3366,7 @@ function formatSearchSuggestionUrl(url: string): string {
 }
 
 function openBookmarkSuggestion(suggestion: SearchBookmarkSuggestion): void {
-  const bookmark = getBookmarkById(suggestion.id)
+  const bookmark = state.allBookmarkMap.get(String(suggestion.id)) || getBookmarkById(suggestion.id)
   if (!bookmark) {
     openSearchTarget(suggestion.url)
     return
@@ -3354,6 +3452,7 @@ function createBookmarkSections(sections: NewTabFolderSection[]): HTMLElement {
   view.dataset.iconLayoutMode = state.iconSettings.layoutMode
   view.dataset.iconShowTitles = String(state.iconSettings.showTitles)
   view.dataset.iconVerticalCenter = String(state.iconSettings.verticalCenter)
+  view.setAttribute('aria-busy', state.reorderingBookmarks ? 'true' : 'false')
 
   const portal = createPortalPanel()
   if (portal) {
@@ -3409,6 +3508,7 @@ function createBookmarkSections(sections: NewTabFolderSection[]): HTMLElement {
       list.className = 'bookmark-grid'
       list.dataset.bookmarkGridFolderId = section.id
       list.setAttribute('aria-label', `${section.title || '文件夹'}书签`)
+      list.setAttribute('aria-busy', state.reorderingBookmarks ? 'true' : 'false')
 
       for (const bookmark of section.bookmarks) {
         list.appendChild(createBookmarkTile(bookmark, section.id, renderedBookmarkIndex))
@@ -3424,6 +3524,14 @@ function createBookmarkSections(sections: NewTabFolderSection[]): HTMLElement {
     }
 
     groupList.appendChild(sectionNode)
+  }
+
+  if (state.bookmarkReorderError) {
+    const error = document.createElement('p')
+    error.className = 'bookmark-reorder-status'
+    error.setAttribute('role', 'status')
+    error.textContent = state.bookmarkReorderError
+    groupList.appendChild(error)
   }
 
   view.appendChild(groupList)
@@ -4023,7 +4131,11 @@ function refreshDerivedBookmarkState(): void {
   state.bookmarkMap = new Map(state.bookmarks.map((bookmark) => [String(bookmark.id), bookmark]))
   state.allBookmarks = buildAllBookmarks(state.rootNode)
   state.allBookmarkMap = new Map(state.allBookmarks.map((bookmark) => [String(bookmark.id), bookmark]))
-  state.searchIndex = buildNewTabSearchIndex(state.folderSections)
+  state.searchIndex = buildNewTabSearchIndex({
+    bookmarks: state.folderData?.bookmarks || extractBookmarkData(state.rootNode).bookmarks,
+    tagIndex: state.bookmarkTagIndex,
+    snapshotIndex: state.searchSnapshotState?.index || null
+  })
 }
 
 function getBookmarkById(bookmarkId: string): chrome.bookmarks.BookmarkTreeNode | null {
