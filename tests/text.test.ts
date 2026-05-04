@@ -8,8 +8,10 @@ import {
 } from '../src/shared/bookmark-identity.js'
 import {
   buildDuplicateKey,
+  containsCjkText,
   displayUrl,
   extractDomain,
+  formatDisplayText,
   normalizeText,
   normalizeUrl,
   stripCommonUrlPrefix
@@ -63,6 +65,33 @@ test('builds duplicate keys from host, pathname and query', () => {
     buildDuplicateKey('not a url/#fragment/'),
     'not a url'
   )
+})
+
+test('formats display text with CJK, English and number spacing', () => {
+  assert.equal(
+    formatDisplayText('开启AI功能后会分析3个书签.React教程已收藏.'),
+    '开启 AI 功能后会分析 3 个书签。React 教程已收藏。'
+  )
+  assert.equal(
+    formatDisplayText('使用Jina Reader解析URL,保留Chrome本地权限'),
+    '使用 Jina Reader 解析 URL，保留 Chrome 本地权限'
+  )
+})
+
+test('keeps URLs, search operators and shortcuts intact while formatting display text', () => {
+  assert.equal(
+    formatDisplayText('试试site:github.com或打开https://example.com/AI教程,按Cmd/Ctrl+Enter打开'),
+    '试试 site:github.com 或打开 https://example.com/AI教程，按 Cmd/Ctrl+Enter 打开'
+  )
+  assert.equal(
+    formatDisplayText('配置#ai-provider后使用folder:前端 筛选'),
+    '配置 #ai-provider 后使用 folder:前端 筛选'
+  )
+})
+
+test('detects whether text contains CJK characters', () => {
+  assert.equal(containsCjkText('Chrome Bookmark Manager'), false)
+  assert.equal(containsCjkText('Chrome 书签'), true)
 })
 
 test('builds stable bookmark identity without depending on Chrome bookmark id', () => {
