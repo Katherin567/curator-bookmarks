@@ -102,10 +102,13 @@ test('options shell falls back to document scrolling on narrow screens', () => {
   assert.match(optionsCss, /@media \(max-width:\s*920px\)\s*\{[\s\S]*?html\s*\{[\s\S]*?overflow-y:\s*scroll[\s\S]*?body\s*\{[\s\S]*?overflow:\s*visible/)
   assert.match(optionsCss, /@media \(max-width:\s*920px\)\s*\{[\s\S]*?\.options-shell\s*\{[\s\S]*?display:\s*block[\s\S]*?height:\s*auto[\s\S]*?overflow:\s*visible/)
   assert.match(optionsCss, /@media \(max-width:\s*920px\)\s*\{[\s\S]*?\.options-sidebar\s*\{[\s\S]*?margin-top:\s*0/)
+  assert.match(optionsCss, /@media \(max-width:\s*920px\)\s*\{[\s\S]*?\.options-sidebar\s*\{[\s\S]*?grid-column:\s*1[\s\S]*?grid-row:\s*1/)
   assert.match(optionsCss, /@media \(max-width:\s*920px\)\s*\{[\s\S]*?\.options-nav\s*\{[\s\S]*?grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(148px,\s*1fr\)\)/)
   assert.match(optionsCss, /@media \(max-width:\s*920px\)\s*\{[\s\S]*?\.options-nav-link,[\s\S]*?\.options-nav-group-trigger\s*\{[\s\S]*?min-height:\s*38px[\s\S]*?width:\s*100%/)
   assert.match(optionsCss, /@media \(max-width:\s*920px\)\s*\{[\s\S]*?\.options-nav-group-trigger,[\s\S]*?\.options-nav-subitem,[\s\S]*?\.options-dashboard-entry\s*\{[\s\S]*?writing-mode:\s*horizontal-tb/)
   assert.match(optionsCss, /@media \(max-width:\s*920px\)\s*\{[\s\S]*?\.options-main\s*\{[\s\S]*?height:\s*auto[\s\S]*?overflow:\s*visible/)
+  assert.match(optionsCss, /@media \(max-width:\s*920px\)\s*\{[\s\S]*?\.options-main\s*\{[\s\S]*?grid-column:\s*1[\s\S]*?grid-row:\s*2/)
+  assert.match(optionsCss, /@media \(max-width:\s*920px\)\s*\{[\s\S]*?\.options-main\s*>\s*\.options-panel\s*\{[\s\S]*?width:\s*100%[\s\S]*?margin-inline:\s*0/)
 })
 
 test('dashboard fullscreen and embedded mode reset the options shell scroll layout', () => {

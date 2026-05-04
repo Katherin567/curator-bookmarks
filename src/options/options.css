@@ -4871,6 +4871,8 @@ body.dashboard-fullscreen-active {
   }
 
   .options-sidebar {
+    grid-column: 1;
+    grid-row: 1;
     position: static;
     width: 100%;
     max-width: none;
@@ -4880,6 +4882,8 @@ body.dashboard-fullscreen-active {
   }
 
   .options-main {
+    grid-column: 1;
+    grid-row: 2;
     width: 100%;
     max-width: none;
     height: auto;
@@ -5956,6 +5960,8 @@ body.dashboard-fullscreen-active {
   }
 
   .options-sidebar {
+    grid-column: 1;
+    grid-row: 1;
     position: static;
     width: 100%;
     max-width: none;
@@ -5965,6 +5971,35 @@ body.dashboard-fullscreen-active {
     border-right: 0;
     max-height: none;
     overflow: visible;
+  }
+
+  .options-main {
+    grid-column: 1;
+    grid-row: 2;
+    width: 100%;
+    max-width: none;
+    height: auto;
+    overflow: visible;
+    padding: 0;
+  }
+
+  .options-main > .options-panel {
+    width: 100%;
+    margin-inline: 0;
+  }
+
+  .options-panel,
+  .options-nav-group,
+  .options-nav-collapsible {
+    min-width: 0;
+  }
+
+  .options-sidebar-label,
+  .options-nav-link,
+  .options-nav-group-trigger,
+  .options-nav-subitem,
+  .options-dashboard-entry {
+    overflow-wrap: anywhere;
   }
 
   .options-nav {
