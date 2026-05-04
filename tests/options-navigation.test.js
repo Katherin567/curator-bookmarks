@@ -60,3 +60,33 @@ test('options dashboard entry keeps the settings-page dashboard instead of redir
   assert.match(dashboardSource, /callbacks\.exitDashboard[\s\S]*window\.location\.hash = '#general'/)
   assert.doesNotMatch(optionsSource, /NEWTAB_DASHBOARD_PATH|openNewTabDashboard|handleDashboardEntryClick/)
 })
+
+test('options shell keeps brand and sidebar fixed while the main settings area scrolls', () => {
+  const optionsCss = readProjectFile('src/options/options.css')
+
+  assert.match(optionsCss, /--options-sidebar-width:\s*244px/)
+  assert.match(optionsCss, /--options-brand-height:\s*82px/)
+  assert.match(optionsCss, /\.options-shell\s*\{[\s\S]*?display:\s*grid[\s\S]*?grid-template-columns:\s*var\(--options-sidebar-width\)\s+var\(--options-shell-content-width\)[\s\S]*?height:\s*100vh[\s\S]*?overflow:\s*hidden/)
+  assert.match(optionsCss, /\.options-header\s*\{[\s\S]*?position:\s*sticky[\s\S]*?top:\s*24px/)
+  assert.match(optionsCss, /\.options-layout\s*\{[\s\S]*?grid-template-columns:\s*var\(--options-sidebar-width\)\s+minmax\(0,\s*1fr\)[\s\S]*?height:\s*100%[\s\S]*?pointer-events:\s*none/)
+  assert.match(optionsCss, /\.options-sidebar\s*\{[\s\S]*?position:\s*sticky[\s\S]*?top:\s*calc\(var\(--options-brand-height\) \+ 24px\)[\s\S]*?max-height:\s*calc\(100vh - var\(--options-brand-height\) - 48px\)[\s\S]*?pointer-events:\s*auto/)
+  assert.match(optionsCss, /\.options-main\s*\{[\s\S]*?height:\s*100%[\s\S]*?overflow:\s*auto[\s\S]*?pointer-events:\s*auto[\s\S]*?scrollbar-gutter:\s*stable/)
+  assert.match(optionsCss, /--options-shell-content-width:\s*minmax\(0,\s*1120px\)/)
+})
+
+test('options shell falls back to document scrolling on narrow screens', () => {
+  const optionsCss = readProjectFile('src/options/options.css')
+
+  assert.match(optionsCss, /@media \(max-width:\s*920px\)\s*\{[\s\S]*?html\s*\{[\s\S]*?overflow-y:\s*scroll[\s\S]*?body\s*\{[\s\S]*?overflow:\s*visible/)
+  assert.match(optionsCss, /@media \(max-width:\s*920px\)\s*\{[\s\S]*?\.options-shell\s*\{[\s\S]*?display:\s*block[\s\S]*?height:\s*auto[\s\S]*?overflow:\s*visible/)
+  assert.match(optionsCss, /@media \(max-width:\s*920px\)\s*\{[\s\S]*?\.options-main\s*\{[\s\S]*?height:\s*auto[\s\S]*?overflow:\s*visible/)
+})
+
+test('dashboard fullscreen and embedded mode reset the options shell scroll layout', () => {
+  const optionsCss = readProjectFile('src/options/options.css')
+
+  assert.match(optionsCss, /\.dashboard-fullscreen-active\s+\.options-shell\s*\{[\s\S]*?display:\s*block[\s\S]*?height:\s*100vh[\s\S]*?overflow:\s*hidden/)
+  assert.match(optionsCss, /\.dashboard-fullscreen-active\s+\.options-layout\s*\{[\s\S]*?display:\s*block[\s\S]*?height:\s*100vh[\s\S]*?pointer-events:\s*auto/)
+  assert.match(optionsCss, /\.dashboard-fullscreen-active\s+\.options-main\s*\{[\s\S]*?height:\s*100vh[\s\S]*?overflow:\s*hidden[\s\S]*?padding:\s*0/)
+  assert.match(optionsCss, /\.options-dashboard-embed\.dashboard-fullscreen-active\s+\.options-shell,\s*\.options-dashboard-embed\.dashboard-fullscreen-active\s+\.options-layout,\s*\.options-dashboard-embed\.dashboard-fullscreen-active\s+\.options-main,\s*\.options-dashboard-embed\.dashboard-fullscreen-active\s+\.dashboard-panel\s*\{[\s\S]*?background:\s*transparent/)
+})
