@@ -188,6 +188,46 @@ button {
   user-select: none;
   scrollbar-color: rgba(245, 245, 247, 0.18) transparent;
   scrollbar-width: thin;
+  line-break: strict;
+  hanging-punctuation: allow-end;
+  text-spacing-trim: trim-start;
+  text-autospace: normal;
+}
+
+.settings-drawer {
+  line-break: strict;
+  hanging-punctuation: allow-end;
+  text-spacing-trim: trim-start;
+  text-autospace: normal;
+}
+
+.newtab-shell :where(
+  input,
+  textarea,
+  select,
+  button,
+  code,
+  kbd,
+  pre,
+  samp,
+  .bookmark-url,
+  .newtab-search-input
+),
+.settings-drawer :where(
+  input,
+  textarea,
+  select,
+  button,
+  code,
+  kbd,
+  pre,
+  samp,
+  .setting-url-input
+) {
+  line-break: auto;
+  hanging-punctuation: none;
+  text-spacing-trim: space-all;
+  text-autospace: no-autospace;
 }
 
 .newtab-shell a,

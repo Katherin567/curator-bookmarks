@@ -1,3 +1,5 @@
+import { formatDisplayText } from '../../shared/text.js'
+
 export function escapeHtml(value: unknown): string {
   return String(value || '')
     .replace(/&/g, '&amp;')
@@ -9,4 +11,8 @@ export function escapeHtml(value: unknown): string {
 
 export function escapeAttr(value: unknown): string {
   return escapeHtml(value)
+}
+
+export function escapeDisplayHtml(value: unknown): string {
+  return escapeHtml(formatDisplayText(value))
 }

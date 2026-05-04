@@ -375,6 +375,32 @@ a {
 .options-shell {
   min-height: 100vh;
   padding: 42px clamp(20px, 4vw, 48px) 56px;
+  line-break: strict;
+  hanging-punctuation: allow-end;
+  text-spacing-trim: trim-start;
+  text-autospace: normal;
+}
+
+.options-shell :where(
+  input,
+  textarea,
+  select,
+  button,
+  code,
+  kbd,
+  pre,
+  samp,
+  .ai-provider-input,
+  .options-search-input,
+  .dashboard-card-url,
+  .modal-card-path,
+  .dashboard-path-chip,
+  .detect-result-url
+) {
+  line-break: auto;
+  hanging-punctuation: none;
+  text-spacing-trim: space-all;
+  text-autospace: no-autospace;
 }
 
 .options-header {
