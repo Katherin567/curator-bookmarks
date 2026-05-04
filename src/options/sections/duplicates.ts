@@ -83,25 +83,19 @@ function isBookmarkInExcludedFolder(bookmark, excludedFolderIds: Set<string>): b
 
 function buildDuplicateGroupModel(key, items) {
   const sortedItems = items.slice().sort(compareDuplicateItemsByNewest)
+  const rankedItems = rankDuplicateGroupItems(sortedItems)
   const folders = collectDuplicateFolders(sortedItems)
   const isCrossFolder = folders.length > 1
   const titleKeys = new Set(sortedItems.map((item) => normalizeDuplicateTitle(item.title)))
   const hasTitleVariants = titleKeys.size > 1
-  const latestItem = sortedItems[0]
-  const oldestItem = sortedItems.slice().sort(compareDuplicateItemsByOldest)[0]
-  const shorterPathItem = sortedItems.slice().sort(compareDuplicateItemsByShorterPath)[0]
-  const fullerTitleItem = sortedItems.slice().sort(compareDuplicateItemsByFullerTitle)[0]
-  const taggedItem = sortedItems.slice().sort(compareDuplicateItemsByTagSignal)[0]
-  const newTabSourceItem = sortedItems.slice().sort(compareDuplicateItemsByNewTabSource)[0]
-  const recentItem = sortedItems.slice().sort(compareDuplicateItemsByRecentActivity)[0]
   const recommendation = buildDuplicateRecommendation({
-    latestItem,
-    oldestItem,
-    shorterPathItem,
-    fullerTitleItem,
-    taggedItem,
-    newTabSourceItem,
-    recentItem,
+    latestItem: rankedItems.latestItem,
+    oldestItem: rankedItems.oldestItem,
+    shorterPathItem: rankedItems.shorterPathItem,
+    fullerTitleItem: rankedItems.fullerTitleItem,
+    taggedItem: rankedItems.taggedItem,
+    newTabSourceItem: rankedItems.newTabSourceItem,
+    recentItem: rankedItems.recentItem,
     isCrossFolder,
     hasTitleVariants
   })
@@ -116,16 +110,52 @@ function buildDuplicateGroupModel(key, items) {
     hasTitleVariants,
     risk: isCrossFolder || hasTitleVariants ? 'high' : 'low',
     riskWeight: (isCrossFolder ? 2 : 0) + (hasTitleVariants ? 1 : 0),
-    latestItemId: String(latestItem?.id || ''),
-    oldestItemId: String(oldestItem?.id || ''),
-    shorterPathItemId: String(shorterPathItem?.id || ''),
-    fullerTitleItemId: String(fullerTitleItem?.id || ''),
-    taggedItemId: hasDuplicateTagSignal(taggedItem) ? String(taggedItem?.id || '') : '',
-    newTabSourceItemId: hasNewTabSourceSignal(newTabSourceItem) ? String(newTabSourceItem?.id || '') : '',
-    recentItemId: hasRecentActivitySignal(recentItem) ? String(recentItem?.id || '') : '',
+    latestItemId: String(rankedItems.latestItem?.id || ''),
+    oldestItemId: String(rankedItems.oldestItem?.id || ''),
+    shorterPathItemId: String(rankedItems.shorterPathItem?.id || ''),
+    fullerTitleItemId: String(rankedItems.fullerTitleItem?.id || ''),
+    taggedItemId: hasDuplicateTagSignal(rankedItems.taggedItem) ? String(rankedItems.taggedItem?.id || '') : '',
+    newTabSourceItemId: hasNewTabSourceSignal(rankedItems.newTabSourceItem) ? String(rankedItems.newTabSourceItem?.id || '') : '',
+    recentItemId: hasRecentActivitySignal(rankedItems.recentItem) ? String(rankedItems.recentItem?.id || '') : '',
     recommendedKeepId: String(recommendation.item?.id || ''),
     recommendation
   }
+}
+
+function rankDuplicateGroupItems(sortedItems) {
+  const [firstItem] = sortedItems
+  const ranked = {
+    latestItem: firstItem || null,
+    oldestItem: firstItem || null,
+    shorterPathItem: firstItem || null,
+    fullerTitleItem: firstItem || null,
+    taggedItem: firstItem || null,
+    newTabSourceItem: firstItem || null,
+    recentItem: firstItem || null
+  }
+
+  for (const item of sortedItems) {
+    if (compareDuplicateItemsByOldest(item, ranked.oldestItem) < 0) {
+      ranked.oldestItem = item
+    }
+    if (compareDuplicateItemsByShorterPath(item, ranked.shorterPathItem) < 0) {
+      ranked.shorterPathItem = item
+    }
+    if (compareDuplicateItemsByFullerTitle(item, ranked.fullerTitleItem) < 0) {
+      ranked.fullerTitleItem = item
+    }
+    if (compareDuplicateItemsByTagSignal(item, ranked.taggedItem) < 0) {
+      ranked.taggedItem = item
+    }
+    if (compareDuplicateItemsByNewTabSource(item, ranked.newTabSourceItem) < 0) {
+      ranked.newTabSourceItem = item
+    }
+    if (compareDuplicateItemsByRecentActivity(item, ranked.recentItem) < 0) {
+      ranked.recentItem = item
+    }
+  }
+
+  return ranked
 }
 
 function collectDuplicateFolders(items) {

@@ -134,9 +134,10 @@ export async function searchBookmarksCooperatively(
 
   for (let index = 0; index < candidates.length; index += SEARCH_CHUNK_SIZE) {
     assertSearchActive(options)
-    const chunk = candidates.slice(index, index + SEARCH_CHUNK_SIZE)
+    const end = Math.min(index + SEARCH_CHUNK_SIZE, candidates.length)
 
-    for (const bookmark of chunk) {
+    for (let itemIndex = index; itemIndex < end; itemIndex += 1) {
+      const bookmark = candidates[itemIndex]
       const match = scoreBookmarkWithReasons(bookmark, parsedQuery)
       if (match.score > 0) {
         appendTopSearchResult(results, {
@@ -147,7 +148,7 @@ export async function searchBookmarksCooperatively(
       }
     }
 
-    if (index + SEARCH_CHUNK_SIZE < candidates.length) {
+    if (end < candidates.length) {
       await yieldSearchWork(options)
     }
   }
@@ -223,6 +224,10 @@ function scoreBookmarkWithReasons(
   const reasons: string[] = []
 
   if (!matchesStructuredFilters(bookmark, parsedQuery, reasons)) {
+    return { score: 0, reasons: [] }
+  }
+
+  if (!matchesRequiredPhraseTerms(bookmark, parsedQuery)) {
     return { score: 0, reasons: [] }
   }
 
@@ -348,7 +353,7 @@ function scoreBookmarkWithReasons(
 
   return {
     score: matched ? Math.max(score, 0) : 0,
-    reasons: reasons.slice(0, 3)
+    reasons: prioritizeSearchReasons(reasons, 3)
   }
 }
 
@@ -473,7 +478,7 @@ function matchesStructuredFilters(
   reasons: string[]
 ): boolean {
   if (!matchesParsedSearchQuery(parsedQuery, {
-    searchText: bookmark.searchText || `${bookmark.normalizedTitle} ${bookmark.normalizedUrl}`,
+    searchText: getBookmarkSearchText(bookmark),
     domain: bookmark.domain,
     url: bookmark.normalizedUrl,
     path: bookmark.path,
@@ -524,6 +529,19 @@ function matchesStructuredFilters(
   }
 
   return true
+}
+
+function matchesRequiredPhraseTerms(
+  bookmark: PopupSearchBookmark,
+  parsedQuery: ParsedPopupSearchQuery
+): boolean {
+  const phraseTerms = parsedQuery.textTerms.filter((term) => /\s/.test(term))
+  if (!phraseTerms.length) {
+    return true
+  }
+
+  const searchText = getBookmarkSearchText(bookmark)
+  return phraseTerms.every((term) => searchText.includes(term))
 }
 
 function termMatchedSemanticField(bookmark: PopupSearchBookmark, term: string): boolean {
@@ -748,6 +766,21 @@ function normalizeReasonText(reason: string): string {
   return text
 }
 
+function prioritizeSearchReasons(reasons: string[], limit: number): string[] {
+  const visibleLimit = Math.max(0, limit)
+  if (!visibleLimit || reasons.length <= visibleLimit) {
+    return reasons.slice(0, visibleLimit)
+  }
+
+  const explicitReasons = reasons.filter(isExplicitSearchReason)
+  const supportingReasons = reasons.filter((reason) => !isExplicitSearchReason(reason))
+  return [...explicitReasons, ...supportingReasons].slice(0, visibleLimit)
+}
+
+function isExplicitSearchReason(reason: string): boolean {
+  return /^(筛选|排除|排序)：/.test(reason)
+}
+
 function buildQueryCoverageReason(queryTerms: string[]): string {
   const termSummary = formatReasonTerms(queryTerms)
   return termSummary ? `匹配：包含全部关键词 ${termSummary}` : ''
@@ -794,11 +827,12 @@ function getSearchCandidates(
     return bookmarks
   }
 
-  const requiredTerms = parsedQuery.queryTerms.length
-    ? parsedQuery.queryTerms
-    : [parsedQuery.normalizedQuery]
+  const requiredTerms = getCandidateRequiredTerms(parsedQuery)
   const directMatches = bookmarks.filter((bookmark) => {
-    const searchText = bookmark.searchText || `${bookmark.normalizedTitle} ${bookmark.normalizedUrl}`
+    if (!matchesSearchCandidateFilters(bookmark, parsedQuery)) {
+      return false
+    }
+    const searchText = getBookmarkSearchText(bookmark)
     return requiredTerms.every((term) => !term || searchText.includes(term))
   })
 
@@ -812,7 +846,10 @@ function getSearchCandidates(
   }
 
   const prefixMatches = bookmarks.filter((bookmark) => {
-    const searchText = bookmark.searchText || `${bookmark.normalizedTitle} ${bookmark.normalizedUrl}`
+    if (!matchesSearchCandidateFilters(bookmark, parsedQuery)) {
+      return false
+    }
+    const searchText = getBookmarkSearchText(bookmark)
     return searchText.includes(prefix)
   })
 
@@ -828,21 +865,24 @@ async function getSearchCandidatesCooperatively(
     return bookmarks
   }
 
-  const requiredTerms = parsedQuery.queryTerms.length
-    ? parsedQuery.queryTerms
-    : [parsedQuery.normalizedQuery]
+  const requiredTerms = getCandidateRequiredTerms(parsedQuery)
   const directMatches: PopupSearchBookmark[] = []
 
   for (let index = 0; index < bookmarks.length; index += SEARCH_CHUNK_SIZE) {
     assertSearchActive(options)
-    for (const bookmark of bookmarks.slice(index, index + SEARCH_CHUNK_SIZE)) {
-      const searchText = bookmark.searchText || `${bookmark.normalizedTitle} ${bookmark.normalizedUrl}`
+    const end = Math.min(index + SEARCH_CHUNK_SIZE, bookmarks.length)
+    for (let itemIndex = index; itemIndex < end; itemIndex += 1) {
+      const bookmark = bookmarks[itemIndex]
+      if (!matchesSearchCandidateFilters(bookmark, parsedQuery)) {
+        continue
+      }
+      const searchText = getBookmarkSearchText(bookmark)
       if (requiredTerms.every((term) => !term || searchText.includes(term))) {
         directMatches.push(bookmark)
       }
     }
 
-    if (index + SEARCH_CHUNK_SIZE < bookmarks.length) {
+    if (end < bookmarks.length) {
       await yieldSearchWork(options)
     }
   }
@@ -859,19 +899,48 @@ async function getSearchCandidatesCooperatively(
   const prefixMatches: PopupSearchBookmark[] = []
   for (let index = 0; index < bookmarks.length; index += SEARCH_CHUNK_SIZE) {
     assertSearchActive(options)
-    for (const bookmark of bookmarks.slice(index, index + SEARCH_CHUNK_SIZE)) {
-      const searchText = bookmark.searchText || `${bookmark.normalizedTitle} ${bookmark.normalizedUrl}`
+    const end = Math.min(index + SEARCH_CHUNK_SIZE, bookmarks.length)
+    for (let itemIndex = index; itemIndex < end; itemIndex += 1) {
+      const bookmark = bookmarks[itemIndex]
+      if (!matchesSearchCandidateFilters(bookmark, parsedQuery)) {
+        continue
+      }
+      const searchText = getBookmarkSearchText(bookmark)
       if (searchText.includes(prefix)) {
         prefixMatches.push(bookmark)
       }
     }
 
-    if (index + SEARCH_CHUNK_SIZE < bookmarks.length) {
+    if (end < bookmarks.length) {
       await yieldSearchWork(options)
     }
   }
 
   return prefixMatches.length ? prefixMatches : bookmarks
+}
+
+function getCandidateRequiredTerms(parsedQuery: ParsedPopupSearchQuery): string[] {
+  return parsedQuery.textTerms.length
+    ? parsedQuery.textTerms
+    : [parsedQuery.normalizedQuery]
+}
+
+function matchesSearchCandidateFilters(
+  bookmark: PopupSearchBookmark,
+  parsedQuery: ParsedPopupSearchQuery
+): boolean {
+  return matchesParsedSearchQuery(parsedQuery, {
+    searchText: getBookmarkSearchText(bookmark),
+    domain: bookmark.domain,
+    url: bookmark.normalizedUrl,
+    path: bookmark.path,
+    type: bookmark.tagContentType,
+    dateAdded: bookmark.dateAdded
+  })
+}
+
+function getBookmarkSearchText(bookmark: PopupSearchBookmark): string {
+  return bookmark.searchText || `${bookmark.normalizedTitle} ${bookmark.normalizedUrl}`
 }
 
 function appendTopSearchResult(results: PopupSearchResult[], result: PopupSearchResult): void {

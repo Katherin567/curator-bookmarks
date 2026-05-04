@@ -54,9 +54,26 @@ const TIME_PATTERNS = [
   { pattern: /^(今天)$/, amount: 0, unit: 'today', label: '今天' }
 ] as const
 
+const SEARCH_OPERATOR_KEYS = new Set([
+  'site',
+  'domain',
+  'url',
+  '站点',
+  '域名',
+  'folder',
+  'path',
+  '文件夹',
+  '目录',
+  '路径',
+  'type',
+  'kind',
+  '类型',
+  '类别'
+])
+
 export function parseSearchQuery(query: unknown, now = Date.now()): ParsedSearchQuery {
-  const rawQuery = normalizeSearchValue(query)
-  const tokens = rawQuery.split(/\s+/).filter(Boolean)
+  const rawQuery = normalizeRawSearchQuery(query)
+  const tokens = tokenizeSearchQuery(rawQuery)
   const textTerms: string[] = []
   const siteFilters: string[] = []
   const folderFilters: string[] = []
@@ -75,7 +92,7 @@ export function parseSearchQuery(query: unknown, now = Date.now()): ParsedSearch
       continue
     }
 
-    const operator = parseSearchOperatorTerm(token)
+    const operator = parseSearchOperatorTokens(tokens, index)
     if (operator) {
       if (operator.kind === 'site') {
         siteFilters.push(operator.value)
@@ -87,6 +104,7 @@ export function parseSearchQuery(query: unknown, now = Date.now()): ParsedSearch
         typeFilters.push(operator.value)
         chips.push({ kind: 'type', label: `类型：${operator.value}`, value: operator.value })
       }
+      index += operator.consumed - 1
       continue
     }
 
@@ -259,6 +277,35 @@ function parseSearchOperatorTerm(term: string): { kind: 'site' | 'folder' | 'typ
   return null
 }
 
+function parseSearchOperatorTokens(
+  tokens: string[],
+  index: number
+): { kind: 'site' | 'folder' | 'type'; value: string; consumed: number } | null {
+  const current = String(tokens[index] || '')
+  const direct = parseSearchOperatorTerm(current)
+  if (direct) {
+    return { ...direct, consumed: 1 }
+  }
+
+  const keyOnly = current.match(/^([^:：]+)[:：]$/)
+  if (!keyOnly || index + 1 >= tokens.length) {
+    return null
+  }
+
+  const key = normalizeSearchValue(keyOnly[1])
+  if (!SEARCH_OPERATOR_KEYS.has(key)) {
+    return null
+  }
+
+  const nextValue = normalizeFilterValue(tokens[index + 1])
+  if (!nextValue) {
+    return null
+  }
+
+  const merged = parseSearchOperatorTerm(`${key}:${nextValue}`)
+  return merged ? { ...merged, consumed: 2 } : null
+}
+
 function parseTimeExpression(tokens: string[], index: number, now: number): { range: SearchDateRange; consumed: number } | null {
   const single = parseTimeToken(tokens[index], now)
   if (single) {
@@ -361,6 +408,10 @@ function createSavedSearchId(now: number): string {
   return `search-${now.toString(36)}-${random}`
 }
 
+function normalizeRawSearchQuery(value: unknown): string {
+  return normalizeText(stripCommonUrlPrefix(value)).trim()
+}
+
 function normalizeSearchValue(value: unknown): string {
   return normalizeText(stripCommonUrlPrefix(value))
     .replace(/^["'“”‘’]+|["'“”‘’]+$/g, '')
@@ -373,6 +424,61 @@ function normalizeFilterValue(value: unknown): string {
 
 function uniqueTerms(values: string[]): string[] {
   return [...new Set(values.map((value) => normalizeFilterValue(value)).filter(Boolean))]
+}
+
+function tokenizeSearchQuery(query: string): string[] {
+  const tokens: string[] = []
+  const source = String(query || '')
+  let current = ''
+  let quote = ''
+
+  const pushCurrent = () => {
+    const value = current.trim()
+    if (value) {
+      tokens.push(value)
+    }
+    current = ''
+  }
+
+  for (const char of source) {
+    if (quote) {
+      if (isMatchingSearchQuote(char, quote)) {
+        quote = ''
+        continue
+      }
+      current += char
+      continue
+    }
+
+    if (isSearchQuote(char)) {
+      quote = char
+      continue
+    }
+
+    if (/\s/.test(char)) {
+      pushCurrent()
+      continue
+    }
+
+    current += char
+  }
+
+  pushCurrent()
+  return tokens
+}
+
+function isSearchQuote(char: string): boolean {
+  return char === '"' || char === "'" || char === '“' || char === '‘'
+}
+
+function isMatchingSearchQuote(char: string, quote: string): boolean {
+  if (quote === '“') {
+    return char === '”'
+  }
+  if (quote === '‘') {
+    return char === '’'
+  }
+  return char === quote
 }
 
 function dedupeChips(chips: ParsedSearchQuery['chips']): ParsedSearchQuery['chips'] {

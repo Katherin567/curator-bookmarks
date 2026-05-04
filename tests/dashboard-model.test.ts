@@ -218,6 +218,12 @@ test('filters dashboard items by query, folder ancestor, domain and month', () =
   assert.deepEqual(filterDashboardItems(model.items, { domain: 'vue.example.com' }).map((item) => item.id), ['b2'])
   assert.deepEqual(filterDashboardItems(model.items, { month: '2026-02' }).map((item) => item.id), ['b1'])
   assert.deepEqual(filterDashboardItems(model.items, { query: 'site:docs.example.com -vue' }).map((item) => item.id), ['b1'])
+  assert.deepEqual(
+    filterDashboardItems(model.items, {
+      query: 'site: docs.example.com folder: "开发 / React" "react table"'
+    }).map((item) => item.id),
+    ['b1']
+  )
 })
 
 test('sorts dashboard items without mutating the original list', () => {

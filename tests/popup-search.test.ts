@@ -240,6 +240,137 @@ test('filters popup search locally by site folder and content type operators', (
   assert.ok(results[0]?.matchReasons.some((reason) => reason.includes('文件夹 frontend')))
 })
 
+test('filters popup search with spaced operators and quoted phrases', () => {
+  const githubDocs = indexBookmarkForSearch(bookmark({
+    id: 'github-docs',
+    title: 'React Data Grid Docs',
+    normalizedTitle: 'react data grid docs',
+    normalizedUrl: 'github.com/reactjs/react.dev',
+    domain: 'github.com',
+    path: 'Frontend Resources / React Docs'
+  }), {
+    schemaVersion: 1,
+    bookmarkId: 'github-docs',
+    url: 'https://github.com/reactjs/react.dev',
+    normalizedUrl: 'https://github.com/reactjs/react.dev',
+    duplicateKey: 'https://github.com/reactjs/react.dev',
+    title: 'React Data Grid Docs',
+    path: 'Frontend Resources / React Docs',
+    summary: 'React data grid documentation.',
+    contentType: '技术文档',
+    topics: ['React'],
+    tags: ['docs'],
+    aliases: [],
+    confidence: 0.8,
+    source: 'ai_naming',
+    model: 'gpt-test',
+    extraction: { status: 'ok', source: 'html', warnings: [] },
+    generatedAt: 1,
+    updatedAt: 1
+  })
+  const blogPost = indexBookmarkForSearch(bookmark({
+    id: 'blog',
+    title: 'React Data Grid Blog Video',
+    normalizedTitle: 'react data grid blog video',
+    normalizedUrl: 'example.com/react-grid-video',
+    domain: 'example.com',
+    path: 'Frontend Resources / React Docs'
+  }), {
+    schemaVersion: 1,
+    bookmarkId: 'blog',
+    url: 'https://example.com/react-grid-video',
+    normalizedUrl: 'https://example.com/react-grid-video',
+    duplicateKey: 'https://example.com/react-grid-video',
+    title: 'React Data Grid Blog Video',
+    path: 'Frontend Resources / React Docs',
+    summary: 'React data grid video article.',
+    contentType: '文章',
+    topics: ['React'],
+    tags: ['blog'],
+    aliases: [],
+    confidence: 0.8,
+    source: 'ai_naming',
+    model: 'gpt-test',
+    extraction: { status: 'ok', source: 'html', warnings: [] },
+    generatedAt: 1,
+    updatedAt: 1
+  })
+  const splitPhrase = indexBookmarkForSearch(bookmark({
+    id: 'split-phrase',
+    title: 'React Data Spreadsheet Grid Docs',
+    normalizedTitle: 'react data spreadsheet grid docs',
+    normalizedUrl: 'github.com/reactjs/grid-docs',
+    domain: 'github.com',
+    path: 'Frontend Resources / React Docs'
+  }), {
+    schemaVersion: 1,
+    bookmarkId: 'split-phrase',
+    url: 'https://github.com/reactjs/grid-docs',
+    normalizedUrl: 'https://github.com/reactjs/grid-docs',
+    duplicateKey: 'https://github.com/reactjs/grid-docs',
+    title: 'React Data Spreadsheet Grid Docs',
+    path: 'Frontend Resources / React Docs',
+    summary: 'React data spreadsheet grid documentation.',
+    contentType: '技术文档',
+    topics: ['React'],
+    tags: ['docs'],
+    aliases: [],
+    confidence: 0.8,
+    source: 'ai_naming',
+    model: 'gpt-test',
+    extraction: { status: 'ok', source: 'html', warnings: [] },
+    generatedAt: 1,
+    updatedAt: 1
+  })
+
+  const results = searchBookmarks(
+    'site: "github.com" folder: "Frontend Resources" type: 技术文档 "data grid" -video',
+    [blogPost, splitPhrase, githubDocs]
+  )
+
+  assert.deepEqual(results.map((item) => item.id), ['github-docs'])
+  assert.ok(results[0]?.matchReasons.some((reason) => reason.includes('站点 github.com')))
+  assert.ok(results[0]?.matchReasons.some((reason) => reason.includes('文件夹 frontend resources')))
+  assert.ok(results[0]?.matchReasons.some((reason) => reason.includes('类型 技术文档')))
+})
+
+test('keeps quoted phrase filtering intact for large popup search indexes', () => {
+  const phraseMatch = indexBookmarkForSearch(bookmark({
+    id: 'phrase-match',
+    title: 'React Data Grid Docs',
+    normalizedTitle: 'react data grid docs',
+    normalizedUrl: 'github.com/reactjs/react.dev',
+    domain: 'github.com',
+    path: 'Frontend Resources / React Docs'
+  }))
+  const splitPhrase = indexBookmarkForSearch(bookmark({
+    id: 'split-phrase',
+    title: 'React Data Spreadsheet Grid Docs',
+    normalizedTitle: 'react data spreadsheet grid docs',
+    normalizedUrl: 'github.com/reactjs/grid-docs',
+    domain: 'github.com',
+    path: 'Frontend Resources / React Docs'
+  }))
+  const fillerBookmarks = Array.from({ length: 1201 }, (_value, index) => {
+    return indexBookmarkForSearch(bookmark({
+      id: `filler-${index}`,
+      title: `React Data Grid Archive ${index}`,
+      normalizedTitle: `react data grid archive ${index}`,
+      normalizedUrl: `archive.example.com/react-data-grid-${index}`,
+      domain: 'archive.example.com',
+      path: 'Archive'
+    }))
+  })
+
+  const results = searchBookmarks('"data grid" site:github.com', [
+    splitPhrase,
+    ...fillerBookmarks,
+    phraseMatch
+  ])
+
+  assert.deepEqual(results.map((item) => item.id), ['phrase-match'])
+})
+
 test('matches short latin typos with approximate local scoring', () => {
   const indexed = indexBookmarkForSearch(bookmark({
     id: 'openai',
