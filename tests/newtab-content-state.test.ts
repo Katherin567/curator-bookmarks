@@ -657,6 +657,18 @@ test('newtab dashboard glass layer only styles the iframe shell', () => {
   assert.doesNotMatch(optionsCss, /newtab-dashboard-(?:overlay|surface|frame)/)
 })
 
+test('newtab compact viewport preserves dashboard trigger label while clearing the utility stack', () => {
+  const newtabCss = readProjectFile('src/newtab/newtab.css')
+  const compactRule = newtabCss.match(/@media \(max-width:\s*680px\)\s*\{[\s\S]*?^}/m)?.[0] || ''
+
+  assert.match(compactRule, /\.newtab-shell\s*\{[\s\S]*?padding:\s*76px\s+18px\s+32px/)
+  assert.match(compactRule, /\.settings-trigger-zone\s*\{[\s\S]*?width:\s*170px/)
+  assert.match(compactRule, /\.dashboard-trigger\s*\{[\s\S]*?min-width:\s*112px[\s\S]*?padding:\s*0\s+10px/)
+  assert.match(compactRule, /\.dashboard-trigger span\s*\{[\s\S]*?font-size:\s*11px/)
+  assert.doesNotMatch(compactRule, /\.dashboard-trigger\s*\{[\s\S]*?width:\s*40px/)
+  assert.doesNotMatch(compactRule, /\.dashboard-trigger span\s*\{[\s\S]*?clip-path:\s*inset\(50%\)/)
+})
+
 test('newtab bookmark tiles match the frosted overview card surface', () => {
   const newtabCss = readProjectFile('src/newtab/newtab.css')
   const tileRule = getCssRuleBody(newtabCss, '.bookmark-tile')

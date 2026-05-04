@@ -3571,7 +3571,7 @@ body.settings-trigger-auto-hide .settings-trigger[aria-expanded="true"] {
 
 @media (max-width: 680px) {
   .newtab-shell {
-    padding: 24px 18px 32px;
+    padding: 76px 18px 32px;
   }
 
   .newtab-page {

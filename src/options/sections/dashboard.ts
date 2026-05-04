@@ -126,7 +126,7 @@ interface DashboardCallbacks {
 export const DASHBOARD_DRAG_MOVE_THRESHOLD = 4
 const DASHBOARD_CARD_HEIGHT = 176
 const DASHBOARD_GRID_GAP = 10
-const DASHBOARD_CARD_MIN_WIDTH = 340
+const DASHBOARD_CARD_MIN_WIDTH = 300
 const DASHBOARD_VIRTUAL_OVERSCAN_ROWS = 12
 const DASHBOARD_VIRTUAL_THRESHOLD = 120
 
@@ -136,6 +136,9 @@ let dashboardTagRegenerateController: AbortController | null = null
 let closingDashboardTagEditor = false
 let dashboardViewReady = false
 let dashboardViewRevealFrame = 0
+let dashboardViewRevealRenderVersion = 0
+let dashboardCardsRenderVersion = 0
+let dashboardCardsCommittedRenderVersion = 0
 const dashboardRenderCache: DashboardRenderCache = {
   modelKey: null,
   model: null,
@@ -341,6 +344,45 @@ export function shouldResetDashboardPanelRevealForRender({
   return Boolean(catalogLoading && viewReady)
 }
 
+export function shouldResetDashboardPanelRevealForSectionEntry({
+  previousSectionKey,
+  nextSectionKey
+}: {
+  previousSectionKey: string
+  nextSectionKey: string
+}): boolean {
+  return previousSectionKey !== 'dashboard' && nextSectionKey === 'dashboard'
+}
+
+export function shouldRevealDashboardPanelAfterRender({
+  catalogLoading,
+  viewReady,
+  revealFramePending,
+  latestRenderVersion,
+  revealRenderVersion,
+  committedRenderVersion
+}: {
+  catalogLoading: boolean
+  viewReady: boolean
+  revealFramePending: boolean
+  latestRenderVersion: number
+  revealRenderVersion: number
+  committedRenderVersion: number
+}): boolean {
+  const safeLatestVersion = Math.max(0, Math.floor(Number(latestRenderVersion) || 0))
+  const safeRevealVersion = Math.max(0, Math.floor(Number(revealRenderVersion) || 0))
+  const safeCommittedVersion = Math.max(0, Math.floor(Number(committedRenderVersion) || 0))
+
+  return (
+    !catalogLoading &&
+    !viewReady &&
+    !revealFramePending &&
+    safeRevealVersion > 0 &&
+    safeRevealVersion === safeLatestVersion &&
+    safeCommittedVersion === safeRevealVersion
+  )
+}
+
 export function shouldResetDashboardVirtualScrollForFilterChange({
   previousKey,
   nextKey,
@@ -404,10 +446,11 @@ export function renderDashboardSection(): void {
   renderDashboardFolderSidebar(model)
 
   renderDashboardSelectionBar(visibleItems)
-  renderDashboardCards(visibleItems)
+  const renderVersion = beginDashboardCardsRender()
+  renderDashboardCards(visibleItems, renderVersion)
   renderDashboardTagEditor(model)
   if (!availabilityState.catalogLoading) {
-    scheduleDashboardPanelReveal()
+    scheduleDashboardPanelReveal(renderVersion)
   }
 
   if (dragState.active) {
@@ -417,6 +460,10 @@ export function renderDashboardSection(): void {
 
 export function isDashboardViewReady(): boolean {
   return !availabilityState.catalogLoading && dashboardViewReady
+}
+
+export function prepareDashboardSectionEntry(): void {
+  resetDashboardPanelReveal()
 }
 
 export function handleDashboardInput(event: Event): void {
@@ -1564,11 +1611,12 @@ function getDashboardDefaultFolderId(): string {
   return availabilityState.folderMap.has(BOOKMARKS_BAR_ID) ? BOOKMARKS_BAR_ID : ''
 }
 
-function renderDashboardCards(items: DashboardItem[]): void {
+function renderDashboardCards(items: DashboardItem[], renderVersion = beginDashboardCardsRender()): void {
   if (availabilityState.catalogLoading) {
     resetDashboardVirtualRenderCache({ clearItems: true })
     clearStableDashboardResultsUpdate()
     dom.dashboardResults.innerHTML = renderDashboardEmptyLoading('正在读取书签目录。')
+    commitDashboardCardsRender(renderVersion)
     return
   }
 
@@ -1578,6 +1626,7 @@ function renderDashboardCards(items: DashboardItem[]): void {
       ? '<div class="detect-empty">当前搜索没有匹配的书签。</div>'
       : '<div class="detect-empty">没有可展示的书签。</div>'
     endStableDashboardResultsUpdate()
+    commitDashboardCardsRender(renderVersion)
     return
   }
 
@@ -1593,6 +1642,7 @@ function renderDashboardCards(items: DashboardItem[]): void {
     dom.dashboardResults.innerHTML = items.map((item) => buildDashboardCard(item)).join('')
     reconcileDashboardTransientUiWithRenderedItems(new Set(items.map((item) => String(item.id))))
     endStableDashboardResultsUpdate()
+    commitDashboardCardsRender(renderVersion)
     return
   }
 
@@ -1630,6 +1680,7 @@ function renderDashboardCards(items: DashboardItem[]): void {
       updateDashboardFloatingEditorPosition(stableRenderedIds)
     }
     endStableDashboardResultsUpdate()
+    commitDashboardCardsRender(renderVersion)
     return
   }
 
@@ -1675,6 +1726,7 @@ function renderDashboardCards(items: DashboardItem[]): void {
   virtualState.renderedStateKey = stateKey
   endStableDashboardResultsUpdate()
   updateDashboardFloatingEditorPosition(renderedIds)
+  commitDashboardCardsRender(renderVersion)
 }
 
 function canReuseDashboardVirtualShell(
@@ -1947,15 +1999,61 @@ function syncDashboardPanelReadyState(): void {
   )
 }
 
-function scheduleDashboardPanelReveal(): void {
-  if (availabilityState.catalogLoading || dashboardViewReady || dashboardViewRevealFrame) {
+function beginDashboardCardsRender(): number {
+  dashboardCardsRenderVersion += 1
+  return dashboardCardsRenderVersion
+}
+
+function commitDashboardCardsRender(renderVersion: number): void {
+  const safeRenderVersion = Math.max(0, Math.floor(Number(renderVersion) || 0))
+  if (!safeRenderVersion || safeRenderVersion !== dashboardCardsRenderVersion) {
     return
   }
 
+  dashboardCardsCommittedRenderVersion = safeRenderVersion
+}
+
+function scheduleDashboardPanelReveal(renderVersion: number): void {
+  if (availabilityState.catalogLoading || dashboardViewReady) {
+    return
+  }
+
+  const safeRenderVersion = Math.max(0, Math.floor(Number(renderVersion) || 0))
+  if (
+    dashboardCardsCommittedRenderVersion !== safeRenderVersion ||
+    dashboardCardsRenderVersion !== safeRenderVersion
+  ) {
+    return
+  }
+
+  if (dashboardViewRevealFrame) {
+    if (dashboardViewRevealRenderVersion === safeRenderVersion) {
+      return
+    }
+    window.cancelAnimationFrame(dashboardViewRevealFrame)
+    dashboardViewRevealFrame = 0
+  }
+
+  dashboardViewRevealRenderVersion = safeRenderVersion
   dashboardViewRevealFrame = window.requestAnimationFrame(() => {
     dashboardViewRevealFrame = window.requestAnimationFrame(() => {
+      const revealRenderVersion = dashboardViewRevealRenderVersion
       dashboardViewRevealFrame = 0
-      if (availabilityState.catalogLoading) {
+      if (!shouldRevealDashboardPanelAfterRender({
+        catalogLoading: availabilityState.catalogLoading,
+        viewReady: dashboardViewReady,
+        revealFramePending: false,
+        latestRenderVersion: dashboardCardsRenderVersion,
+        revealRenderVersion,
+        committedRenderVersion: dashboardCardsCommittedRenderVersion
+      })) {
+        if (
+          !availabilityState.catalogLoading &&
+          !dashboardViewReady &&
+          dashboardCardsCommittedRenderVersion === dashboardCardsRenderVersion
+        ) {
+          scheduleDashboardPanelReveal(dashboardCardsRenderVersion)
+        }
         return
       }
       dashboardViewReady = true
@@ -1969,6 +2067,7 @@ function scheduleDashboardPanelReveal(): void {
 
 function resetDashboardPanelReveal(): void {
   dashboardViewReady = false
+  dashboardViewRevealRenderVersion = 0
   if (dashboardViewRevealFrame) {
     window.cancelAnimationFrame(dashboardViewRevealFrame)
     dashboardViewRevealFrame = 0
