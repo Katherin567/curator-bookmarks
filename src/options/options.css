@@ -1745,6 +1745,11 @@ a {
   scrollbar-gutter: stable;
 }
 
+.dashboard-card-grid.is-updating {
+  min-height: max(176px, var(--dashboard-results-stable-height, 176px));
+  content-visibility: auto;
+}
+
 .dashboard-card-grid.is-virtualized {
   display: block;
   position: relative;
