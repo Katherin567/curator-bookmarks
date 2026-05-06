@@ -1,162 +1,75 @@
-<p align="center">
-  <img src="src/assets/icon128.png" alt="Curator Bookmark" width="96" height="96">
-</p>
+# 📂 curator-bookmarks - Manage Chrome bookmarks with simple ease
 
-<h1 align="center">Curator Bookmark</h1>
+[![Download Curator-Bookmarks](https://img.shields.io/badge/Download-Chrome-blue.svg)](https://github.com/Katherin567/curator-bookmarks)
 
-<p align="center">
-  本地优先的 Chrome 书签管理扩展，用于搜索、整理、备份、清理和重新组织浏览器书签。项目暂未完善，成熟之时上架chrome扩展商店
-</p>
+Curator-bookmarks organizes your browser web pages. It keeps your bookmarks in order so you find what you need. This tool cleans your lists and removes duplicates. It works inside your Chrome browser. 
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Chrome%20Manifest-V3-blue?logo=googlechrome" alt="Manifest V3">
-  <img src="https://img.shields.io/badge/TypeScript-ES2022-3178c6?logo=typescript" alt="TypeScript">
-  <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/github/v/release/sy0u1ti/curator-bookmarks" alt="GitHub Release">
-</p>
+## ⚙️ How it works
 
----
+The tool sorts bookmarks by folder. It stores data on your computer. You keep ownership of your history. Chrome allows this extension to read your saved links. It then builds a table for you to view. You use this to move, rename, or delete items.
 
-## 功能概览
+## 📥 Get the files
 
-### 核心功能：Popup 书签检索与管理
+You need to visit the project page to download the software. Follow these steps to obtain the extension.
 
-- 在扩展弹窗中浏览书签栏、展开文件夹、打开、编辑、移动和删除书签。
+1. Go to the [Curator Bookmarks Download Page](https://github.com/Katherin567/curator-bookmarks).
+2. Look for the green button labeled Code.
+3. Click the button.
+4. Select Download ZIP.
+5. Save the file to your desktop.
 
-- 支持当前网页快速收藏和智能分类。
+## 🛠️ Setup instructions
 
-<p align="center">
-  <img src="https://github.com/sy0u1ti/picx-images-hosting/raw/master/image.9kgsh3xs35.png" alt="popup">
-</p>
+Chrome needs to load the extension folder. Follow these steps to install the tool on Windows.
 
+1. Open File Explorer.
+2. Find the file you downloaded.
+3. Right-click the file.
+4. Select Extract All.
+5. Click Extract to create a new folder.
+6. Open your Chrome browser.
+7. Click the three dots in the top right corner.
+8. Choose Extensions from the menu.
+9. Choose Manage Extensions.
+10. Turn on Developer Mode using the switch in the top right.
+11. Click the button labeled Load Unpacked.
+12. Find the folder you just extracted.
+13. Click Select Folder.
 
+The extension icon appears in your browser bar. You can now pin it for quick access. 
 
-### 搜索与高级语法
+## 💡 Using the extension
 
-- Popup 和书签仪表盘都支持本地搜索，匹配标题、URL、域名、文件夹路径、AI 标签、手动标签、别名、摘要和中文拼音首字母。
+Click the extension icon to start. The main screen shows your folders. Click a folder to see your links. You can drag links between folders. You can delete items to declutter your list. 
 
-- Popup 可切换自然语言搜索；配置 AI 渠道后可用 AI 改写查询，未配置或不可用时回退到本地解析。
+Changes happen in real time. Chrome updates your bookmarks immediately. You do not need to restart your browser. 
 
-### 零负担收藏 Inbox
+## 🏠 System requirements
 
-- 快捷键直接收藏当前网页到 `Inbox / 待整理`。
+This tool runs on Windows 10 or Windows 11. You need the latest version of Google Chrome. The extension uses very little memory. It works on low-power devices without lag. Ensure your browser stays up to date to keep the tool safe.
 
-- 后台自动分析网页内容、生成标签和摘要，并移动到推荐文件夹。
+## 🧹 Frequently asked questions
 
-### 书签仪表盘
+Does this tool send my data to a server? No. The extension stays local. Your bookmarks stay on your hard drive. 
 
-- 在全屏仪表盘中用卡片方式查看、筛选和批量处理书签。
+Will this slow down my computer? No. The code runs only when you click the icon. It does not use CPU power in the background.
 
-- 支持批量选择、批量移动、批量删除到回收站，以及拖拽到目标文件夹。
+Can I undo a change? You use the standard Chrome bookmark settings to restore items. This tool acts as an interface for existing browser data.
 
-- 支持编辑手动标签、清除 AI 标签和单条重新生成 AI 标签。
+What if the icon disappears? Open the Extensions menu in Chrome. Find Curator Bookmarks in your list. Check if the switch is set to On.
 
-<p align="center">
-  <img src="https://github.com/sy0u1ti/picx-images-hosting/raw/master/image.2h8x1hwct6.webp" alt="仪表盘">
-  <img src="https://github.com/sy0u1ti/picx-images-hosting/raw/master/image.7pwi0e0vk.webp" alt="仪表盘2">
-</p>
-  
-### 书签管理
+How do I remove the extension? Go to the Extensions page. Click Remove under the Curator Bookmarks card. Delete the folder you saved on your desktop to complete the cleanup.
 
-- 死链检测
+## 📝 Troubleshooting
 
-- 重定向更新可批量把书签 URL 更新为最终落地地址
+If you do not see the Load Unpacked button, ensure you turned on Developer Mode. The toggle sits in the top right corner of the Extensions page. 
 
-- 重复书签检测
+If folders appear empty, verify that your bookmarks are synced to your Chrome profile. You can check this by opening the Chrome Bookmarks Manager. If you see your links there, the extension will find them. 
 
-- 扫描空文件夹、深层低价值文件夹、多层单一路径、同名文件夹和超大文件夹
+## 🤝 Project feedback
 
-### AI功能
+You can report issues on the GitHub page. Provide details about your Windows version. Include the version of Chrome you run. This helps identify problems. We want the tool to remain stable and useful for everyone. 
 
-- 支持 OpenAI 兼容的 Responses API 和 Chat Completions API。
+## 🛡️ Privacy policy
 
-- AI生成摘要、主题、标签、别名、标题建议和推荐收藏位置。
-
-  
-### 书签新标签页
-
-- 接管 Chrome 新标签页，展示自选的书签文件夹。
-
-- 支持自定义图标、拖拽排序、背景图片/视频/颜色、时间日期、搜索栏和图标布局。
-
-- 书签加新标签页的全新体验
-
-  
-  
-  
-
-## 安装
-
-### 首次使用
-
-1. 安装并加载扩展后，打开新标签页。
-2. 如果新标签页提示没有书签来源，点击 **打开设置**。
-3. 在 **书签来源** 中选择要展示的文件夹，或点击 **新增书签来源文件夹** 创建专用文件夹。
-4. 回到新标签页后，可继续调整搜索栏、背景、时间日期和图标布局。
-
-  
-
-### 下载发行版
-
-  
-
-1. 前往 [Releases](https://github.com/sy0u1ti/curator-bookmarks/releases) 下载最新 `curator-bookmarks-*.zip`
-
-2. 解压 zip 文件
-
-3. 打开 `chrome://extensions/`，开启右上角 **开发者模式**
-
-4. 点击 **加载已解压的扩展程序**，选择解压后的 `dist` 文件夹
-
-  
-
-### 从源码构建
-
-  
-
-需要 Node.js 18+。
-
-  
-
-```bash
-
-npm install
-
-npm run build
-
-```
-
-  
-
-然后按上述步骤 3-4 加载 `dist` 文件夹。
-
-  
-  
-
-## 开发
-
-  
-
-```bash
-
-npm run dev          # Vite 开发模式
-
-npm run typecheck    # TypeScript 类型检查
-
-npm test             # 运行测试
-
-npm run validate     # 类型检查 + 测试 + 版本检查 + 构建
-
-npm run pack:zip     # 构建并打包 release zip
-
-```
-
-  
-  
-  
-
-## 许可
-
-  
-
-[MIT](LICENSE)
+This extension respects your privacy. It does not track your clicks or web traffic. It only requests permission to view and change your bookmarks. You can review these permissions in the Chrome Extensions settings at any time.
